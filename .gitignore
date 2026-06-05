@@ -3,6 +3,4 @@ __pycache__/
 *.pyc
 .venv/
 
-# 第三方版權簡報(11.5MB 二進位)— 不入庫,本機保留
-AI_Investment_Blueprint.pdf
-*.pdf
+# 來源簡報(NotebookLM 依 YouTube 影片產生)— 依使用者確認納入
