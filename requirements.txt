@@ -1,17 +1,17 @@
-# 必要
-PyYAML>=6.0          # 讀 config.yaml / watchlist.yaml
+# --- Required ---
+PyYAML>=6.0          # read config.yaml / watchlist.yaml
 
-# 美股報價 (台股用 FinMind,純 stdlib 不需套件)
+# --- US quotes (TW market uses FinMind, no package needed) ---
 yfinance>=0.2.40
 
-# 選用:報表美化 (沒有也能跑,自動降級為純文字)
-rich>=13.0
-
-# 視覺化儀表板 (app.py)
+# --- Visualization dashboard (app.py) ---
 streamlit>=1.30
 plotly>=5.18
 pandas>=2.0
 
-# 選用:watch 桌面通知 (擇一即可,沒有則終端機響鈴)
+# --- Optional: prettier CLI output (falls back to plain text if absent) ---
+rich>=13.0
+
+# --- Optional: desktop notifications for `watch` (pick either one) ---
 # win10toast>=0.9   # Windows
-# plyer>=2.1        # 跨平台
+# plyer>=2.1        # cross-platform

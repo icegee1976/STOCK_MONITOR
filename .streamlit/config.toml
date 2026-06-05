@@ -1,0 +1,6 @@
+# Streamlit 專案設定 — 讓 `streamlit run app.py` 乾淨啟動
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "light"
