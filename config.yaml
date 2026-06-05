@@ -1,0 +1,48 @@
+# ============================================================
+#  AI 護國群山 — 全域設定 (global config)
+#  所有「假設」都攤在這裡，可自由修改。沒有黑箱。
+# ============================================================
+
+base_currency: TWD            # 投組彙總幣別 (TWD 或 USD)
+
+fx:
+  # 美元兌台幣匯率；程式會嘗試線上更新，失敗時用此後備值
+  USDTWD: 32.0
+
+# --- 本益比河流圖：auto 模式用的歷史百分位 ---
+# 當某檔股票 pe_bands 設為 'auto' 時，用過去 N 年的歷史本益比
+# 取以下百分位當作五個價格帶的本益比倍數。
+pe_band_percentiles:
+  super_bargain: 10           # 大特價 = 歷史 PE 第 10 百分位
+  cheap: 25                   # 便宜價 = 第 25 百分位
+  fair: 50                    # 合理價 = 中位數
+  expensive: 75               # 昂貴價 = 第 75 百分位
+  euphoria: 90                # 瘋狂價 = 第 90 百分位
+
+history_years: 5              # 歷史本益比 / 波動率回看年數
+
+# --- 交易成本模型 (投報率試算時可選擇是否扣除) ---
+fees:
+  tw:
+    brokerage: 0.001425       # 券商手續費 (單邊)
+    brokerage_discount: 0.6   # 電子下單折扣 (0.6 = 打六折)
+    tax_sell: 0.003           # 證交稅 (賣出，一般股票 0.3%)
+  us:
+    commission: 0.0           # 多數美券零佣金
+    dividend_withholding: 0.30 # 外國人美股股利預扣稅 30%
+
+# --- 投報率試算的時間長度 (年) ---
+roi_horizons_years: [1, 3, 5]
+
+# --- 提醒設定 ---
+alert:
+  notify_zone: cheap          # 價格進入此區(含)或更低時觸發提醒
+                              # 可選: super_bargain / cheap / fair
+  desktop_notification: true  # Windows 桌面通知 (需 win10toast，無則純文字)
+
+# --- 數據來源 ---
+providers:
+  tw: finmind                 # 台股：FinMind (免金鑰可用，有 token 提高額度)
+  us: yfinance                # 美股：yfinance 主，失敗自動降級
+  finmind_token: ""           # 選填，到 finmindtrade.com 註冊可拉高速率
+  cache_minutes: 15           # 報價快取分鐘數，避免重複打 API

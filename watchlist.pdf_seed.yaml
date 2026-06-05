@@ -1,0 +1,239 @@
+# ============================================================
+#  監測清單 (watchlist)  —  AI + 太空 成長股
+# ============================================================
+#  每一檔的「估價假設」都攤在這裡，請當成活文件持續修改。
+#
+#  ⚠ 最重要的觀念：「便宜價」不是 API 算出來的事實，而是建立在
+#     你對「未來 EPS / 未來營收」的假設上。改一個成長率，便宜價
+#     就會差很多。所以這些數字是「可辯論的判斷」，不是真理。
+#     程式會用它們計算，但永遠對你誠實標示假設來源。
+#
+#  估價方法 (method) 三選一：
+#    pe_band    : 適合「會賺錢」的成長股。
+#                 forward_eps(或 derive) × pe_bands = 五個價格帶
+#    ps_band    : 適合「還在燒錢、本益比無意義」的成長股(多數太空股)。
+#                 (forward_revenue / shares) × ps_bands = 價格帶
+#    price_band : 最保守的後備法。直接用過去 N 年「股價分布百分位」
+#                 當價格帶，完全不靠 EPS 假設。
+#
+#  pe_bands / ps_bands 可填 'auto' → 用歷史本益比(河流圖)的百分位自動推。
+# ============================================================
+
+stocks:
+
+# ---------- 台股：PDF《AI 護國群山》四大標的 ----------
+
+  - ticker: "2330"
+    market: TW
+    name: 台積電 TSMC
+    theme: [先進製程, CoWoS, CPO]
+    valuation:
+      method: pe_band
+      derive:                 # forward EPS 推導鏈 (PDF p.4，保守值)
+        base_revenue: 2.89e12 # 2024 營收 (TWD)
+        revenue_cagr: 0.24    # 年複合成長率假設
+        net_margin: 0.41362   # 稅後淨利率
+        shares: 25.93e9       # 發行股數
+        target_year: 2029
+      pe_bands:               # PDF p.5 河流圖區間 (≈歷史 PE 百分位)
+        super_bargain: 12.81
+        cheap: 16.49
+        fair: 23.85
+        expensive: 27.53
+        euphoria: 31.20
+    note: "PDF p4-5。便宜價≈2226、大特價≈1729。市場標準制定者。"
+
+  - ticker: "2317"
+    market: TW
+    name: 鴻海 Hon Hai
+    theme: [CPO, AI伺服器, 工業富聯]
+    valuation:
+      method: pe_band
+      forward_eps: 17.79      # PDF p.7：2026 預估 EPS
+      target_year: 2026
+      pe_bands:               # 便宜 PE 11.5 來自 PDF；其餘為估計，請校正
+        super_bargain: 9.5
+        cheap: 11.5
+        fair: 15.0
+        expensive: 18.5
+        euphoria: 22.0
+    note: "PDF p6-7。便宜價≈204.7 (17.79×11.5)。NVIDIA 唯一代工 + CPO 第二成長曲線。"
+
+  - ticker: "2454"
+    market: TW
+    name: 聯發科 MediaTek
+    theme: [ASIC, 客製化晶片]
+    valuation:
+      method: pe_band
+      forward_eps: 132        # PDF p.9：2027 EPS(較保守)。2028 樂觀情境喊到 400
+      target_year: 2027
+      pe_bands: auto          # 用歷史本益比河流圖自動推
+    note: "PDF p8-9。ASIC 十倍速成長。EPS 2026 短暫下降(63)→2028 三級跳。主人與小狗理論。"
+
+  - ticker: "2449"
+    market: TW
+    name: 京元電子 KYEC
+    theme: [高功率測試, AI測試]
+    valuation:
+      method: pe_band
+      forward_eps: 18.0       # PDF p.10：明年 EPS
+      target_year: 2027
+      pe_bands: auto
+    note: "PDF p10。物美價廉純 AI 股，本益比約 17x 遠低於大盤 30x。AI 測試營收年增近 100%。"
+
+# ---------- 台股：你 Computex 觀察的電源 / 散熱 / 光通訊 ----------
+
+  - ticker: "2308"
+    market: TW
+    name: 台達電 Delta
+    theme: [電源, 800V_HVDC, 散熱, 液冷]
+    valuation:
+      method: pe_band
+      forward_eps: 25.0       # ⚠ 估計值，請依最新財報校正
+      target_year: 2027
+      pe_bands: auto
+    note: "AI 機架電源+散熱全端方案，48V/800V HVDC 受惠。對應你 Computex『電源是主戰場』。"
+
+  - ticker: "3324"
+    market: TW
+    name: 雙鴻 Auras
+    theme: [散熱, 液冷]
+    valuation:
+      method: price_band      # 波動大、EPS 假設難，先用股價分布百分位
+      lookback_years: 4
+    note: "深耕液冷十年，訂單能見度延伸至 2027。"
+
+# ---------- 美股：AI 算力 / 記憶體 / ASIC / 光通訊 ----------
+
+  - ticker: "NVDA"
+    market: US
+    name: NVIDIA
+    theme: [GPU, AI_Factory, CPO, Vera_CPU]
+    valuation:
+      method: pe_band
+      forward_eps: 6.50       # ⚠ 估計 (FY2027≈trailing，偏保守，上修空間大)，請校正
+      target_year: 2027
+      pe_bands:               # ⚠ 美股請用「明確前瞻本益比帶」(auto 對暴增EPS失真)
+        super_bargain: 22
+        cheap: 28
+        fair: 36
+        expensive: 46
+        euphoria: 58
+    note: "你的核心論點：AI Factory 制定者，看 $10T 市值。forward P/E 仍偏低。"
+
+  - ticker: "AVGO"
+    market: US
+    name: Broadcom
+    theme: [ASIC, 客製AI晶片, 光通訊]
+    valuation:
+      method: pe_band
+      forward_eps: 7.50       # ⚠ 估計，請校正
+      target_year: 2027
+      pe_bands: { super_bargain: 20, cheap: 26, fair: 34, expensive: 44, euphoria: 55 }
+    note: "超大廠客製 ASIC 最大贏家。對應 PDF 的 ASIC 主軸。"
+
+  - ticker: "MRVL"
+    market: US
+    name: Marvell
+    theme: [光通訊, ASIC, 互連]
+    valuation:
+      method: pe_band
+      forward_eps: 3.50       # ⚠ 估計
+      target_year: 2027
+      pe_bands: { super_bargain: 20, cheap: 28, fair: 38, expensive: 50, euphoria: 65 }
+    note: "資料中心網通+光互連。高成長,本益比帶偏高。"
+
+  - ticker: "MU"
+    market: US
+    name: Micron
+    theme: [HBM, DDR5, 記憶體]
+    valuation:
+      method: pe_band
+      forward_eps: 12.0       # ⚠ 記憶體景氣循環，EPS 波動大，務必校正
+      target_year: 2027
+      pe_bands: { super_bargain: 8, cheap: 11, fair: 15, expensive: 20, euphoria: 28 }
+    note: "HBM 供給吃緊三巨頭之一。對應你『DDR 需求井噴』。循環股,本益比帶刻意偏低。"
+
+  - ticker: "ALAB"
+    market: US
+    name: Astera Labs
+    theme: [連接, PCIe, 互連]
+    valuation:
+      method: pe_band
+      forward_eps: 2.20       # ⚠ 高成長高估值，估計值
+      target_year: 2027
+      pe_bands: { super_bargain: 35, cheap: 50, fair: 70, expensive: 95, euphoria: 130 }
+    note: "AI 連接介面新星，對應你『連接是重要戰場』。高本益比，注意瘋狂價。"
+
+  - ticker: "NVTS"
+    market: US
+    name: Navitas (GaN/SiC)
+    theme: [GaN, SiC, 800V_HVDC, 電源]
+    valuation:
+      method: price_band      # 仍在轉盈，EPS 不穩 → 用股價分布
+      lookback_years: 3
+    note: "NVIDIA 800V HVDC 合作夥伴，GaN 功率元件。高風險高彈性。"
+
+  - ticker: "VRT"
+    market: US
+    name: Vertiv
+    theme: [電源, 散熱, 資料中心基建]
+    valuation:
+      method: pe_band
+      forward_eps: 4.50       # ⚠ 估計
+      target_year: 2027
+      pe_bands: { super_bargain: 22, cheap: 30, fair: 40, expensive: 52, euphoria: 68 }
+    note: "資料中心電源+散熱基建龍頭，對應 PDF『大功率電力與散熱』主軸。"
+
+# ---------- 美股：太空 (你指定的太空領域) ----------
+#  太空股多半還在燒錢，本益比無意義 → 用 ps_band 或 price_band。
+#  forward_revenue 用公司財測，請隨季報更新。
+
+  - ticker: "RKLB"
+    market: US
+    name: Rocket Lab
+    theme: [火箭, 太空系統]
+    valuation:
+      method: ps_band
+      forward_revenue: 1.0e9  # ⚠ 估計 (FY2026 區間)，請校正
+      shares: 5.0e8           # ⚠ 約略流通股數，請校正
+      ps_bands:               # 股價/營收 倍數帶 (高成長股偏高)
+        super_bargain: 8
+        cheap: 14
+        fair: 22
+        expensive: 32
+        euphoria: 45
+    note: "Backlog $2.2B、Q1 營收 +64% YoY。太空股龍頭，估值彈性大。"
+
+  - ticker: "ASTS"
+    market: US
+    name: AST SpaceMobile
+    theme: [衛星通訊, 太空]
+    valuation:
+      method: ps_band
+      forward_revenue: 1.75e8 # ⚠ FY2026 財測 $150-200M 取中值
+      shares: 3.2e8           # ⚠ 請校正
+      ps_bands: { super_bargain: 15, cheap: 30, fair: 55, expensive: 90, euphoria: 140 }
+    note: "太空 4G/5G 寬頻，60+ 電信夥伴覆蓋 30 億用戶。極早期、極高波動。"
+
+  - ticker: "LUNR"
+    market: US
+    name: Intuitive Machines
+    theme: [登月, 太空服務]
+    valuation:
+      method: ps_band
+      forward_revenue: 9.5e8  # ⚠ FY2026 財測 $0.9-1.0B 取中值
+      shares: 1.4e8           # ⚠ 請校正
+      ps_bands: { super_bargain: 1.5, cheap: 3, fair: 5, expensive: 8, euphoria: 12 }
+    note: "五家中最接近獲利，NASA+國防 backlog。"
+
+  - ticker: "PL"
+    market: US
+    name: Planet Labs
+    theme: [衛星影像, 太空數據]
+    valuation:
+      method: ps_band
+      forward_revenue: 3.5e8  # ⚠ 請校正
+      shares: 3.0e8           # ⚠ 請校正
+      ps_bands: { super_bargain: 3, cheap: 6, fair: 10, expensive: 16, euphoria: 24 }
+    note: "國防/情報衛星影像，RPO +361%。"
