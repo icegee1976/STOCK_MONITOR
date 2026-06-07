@@ -233,8 +233,7 @@ def main():
     elif args.cmd == "watch":
         cmd_watch(args, config, stocks)
     elif args.cmd == "bands":
-        args.ticker = args.ticker
-        args.market = None
+        args.market = None          # 等同 report --ticker <ticker>
         cmd_report(args, config, stocks)
 
 

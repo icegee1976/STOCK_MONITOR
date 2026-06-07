@@ -36,11 +36,13 @@ def _sell_proceeds(price: float, shares: float, market: str, fees: dict) -> floa
 
 
 def scenario_roi(stock_cfg, data, zones_info, capital: float, config: dict,
-                 horizons=None, capital_currency: str = None) -> dict:
+                 horizons: list | None = None, capital_currency: str | None = None) -> dict:
     """capital 以 capital_currency 計(預設同標的幣別)。"""
     market = stock_cfg["market"].upper()
     fees = config.get("fees", {"tw": {}, "us": {}})
     price = data.price
+    if price is None or price <= 0:           # public 函式自我防護(不依賴 caller 先檢查)
+        return {"error": "無有效現價,無法試算"}
     stock_ccy = data.currency or ("TWD" if market == "TW" else "USD")
     cap_ccy = capital_currency or stock_ccy
     horizons = horizons or config.get("roi_horizons_years", [1, 3, 5])
@@ -61,6 +63,9 @@ def scenario_roi(stock_cfg, data, zones_info, capital: float, config: dict,
         return {"error": f"資金不足以買進 1 股(現價 {price} {stock_ccy})"}
 
     div_y = data.dividend_yield or 0.0
+    # 股利用「每股實際年配息 × 年數」累加(非殖利率×買價,避免高價買進時脫鉤);
+    # 累積型 INTL ETF 的價格已 total-return 還原(配息滾入價格),不另計避免雙重計入。
+    per_share_div = 0.0 if market == "INTL" else (data.annual_dividend or 0.0)
     target_year = zones_info.get("target_year")
 
     scenarios = []
@@ -69,7 +74,7 @@ def scenario_roi(stock_cfg, data, zones_info, capital: float, config: dict,
         rows = []
         for yrs in horizons:
             proceeds = _sell_proceeds(tprice, shares, market, fees)
-            divs = shares * price * div_y * yrs        # 簡化:股利率持平累積
+            divs = shares * per_share_div * yrs        # 每股實額×年數(粗估,假設配息持平)
             total = proceeds + divs
             ret = (total - spent) / spent
             ann = (1 + ret) ** (1 / yrs) - 1 if (1 + ret) > 0 else -1.0

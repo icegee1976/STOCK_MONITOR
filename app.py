@@ -53,8 +53,17 @@ BAND_FILL = [  # (下界key, 上界key, 顏色, 標籤)
 # --------------------------------------------------------------------------- #
 #  資料載入 (含快取)
 # --------------------------------------------------------------------------- #
+def _mtimes():
+    """config/watchlist 的修改時間,當快取鍵 → 改檔即自動讓快取失效(不必重啟)。"""
+    try:
+        return tuple(os.path.getmtime(os.path.join(HERE, f))
+                     for f in ("config.yaml", "watchlist.yaml"))
+    except OSError:
+        return (0.0, 0.0)
+
+
 @st.cache_data(show_spinner=False)
-def load_config():
+def load_config(stamp):     # stamp(=mtime tuple)參與 hash:改設定檔即重載
     with open(os.path.join(HERE, "config.yaml"), "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
     with open(os.path.join(HERE, "watchlist.yaml"), "r", encoding="utf-8") as f:
@@ -64,8 +73,9 @@ def load_config():
 
 
 @st.cache_data(ttl=900, show_spinner=False)
-def analyze_stock(ticker, _cfg, _config):
-    """回傳可序列化的分析結果 dict。_cfg/_config 前綴底線避免被 hash。"""
+def analyze_stock(ticker, _cfg, _config, stamp):
+    """回傳可序列化的分析結果 dict。_cfg/_config 前綴底線避免被 hash;
+    stamp(檔案 mtime)參與 hash → 改 watchlist 後該股分析即重算,不會回傳舊 zones。"""
     pcfg = _config.get("providers", {})
     yrs = int(_config.get("history_years", 5))
     data = providers.fetch(_cfg, pcfg, yrs, use_cache=True)
@@ -89,12 +99,18 @@ def analyze_stock(ticker, _cfg, _config):
     return out
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def fx_usd_twd(fallback):
+    """即時 USD/TWD,快取 1 小時 → 避免每次 widget 互動都同步打匯率 API 卡頓。"""
+    return providers.usd_twd(fallback)
+
+
 def build_all(stocks, config, market_filter=None):
     items = []
     prog = st.progress(0.0, text="抓取報價中…")
     flt = [s for s in stocks if (not market_filter or s["market"] == market_filter)]
     for i, s in enumerate(flt):
-        items.append(analyze_stock(str(s["ticker"]), s, config))
+        items.append(analyze_stock(str(s["ticker"]), s, config, STAMP))
         prog.progress((i + 1) / len(flt), text=f"抓取 {s.get('name','')} …")
     prog.empty()
     return items
@@ -148,7 +164,7 @@ def river_chart(item):
     fig.update_layout(height=460, margin=dict(l=10, r=120, t=30, b=10),
                       yaxis_range=[lo, hi], showlegend=False,
                       title=f"{item['name']} 價格帶河流圖")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 def roi_bar(r):
@@ -163,14 +179,15 @@ def roi_bar(r):
     fig.update_layout(barmode="group", height=380, title="各情境年化報酬 (%)",
                       margin=dict(l=10, r=10, t=40, b=10),
                       yaxis_title="年化報酬 %")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 # --------------------------------------------------------------------------- #
 #  主程式
 # --------------------------------------------------------------------------- #
 st.set_page_config(page_title="成長股／ETF 監測器", layout="wide", page_icon="📈")
-config, stocks = load_config()
+STAMP = _mtimes()                       # 全域快取鍵:config/watchlist 改動即失效
+config, stocks = load_config(STAMP)
 
 st.title("📈 美股／台股 AI＋太空 成長股／ETF 監測器")
 st.caption("⚠ 資訊／教育用途,非投資建議;免費數據為延遲報價。")
@@ -219,7 +236,7 @@ with tab_overview:
         return f"color: white; background-color: {REGION_HEX.get(v, '#888')}"
     st.dataframe(
         df.style.map(color_region, subset=["價位"]),
-        use_container_width=True, height=640,
+        width="stretch", height=640,
         column_config={
             "需跌%": st.column_config.NumberColumn(format="%.1f%%"),
             "1年觸及%": st.column_config.NumberColumn(format="%.0f%%"),
@@ -238,7 +255,7 @@ with tab_stock:
     pick = st.selectbox("選擇標的", list(names.keys()))
     if pick:
         s_cfg = next(s for s in stocks if str(s["ticker"]) == names[pick])
-        it = analyze_stock(names[pick], s_cfg, config)
+        it = analyze_stock(names[pick], s_cfg, config, STAMP)
         if it["error"]:
             st.error(it["error"])
         else:
@@ -278,7 +295,7 @@ with tab_roi:
     cap_ccy = colc.selectbox("資金幣別", ["TWD", "USD"], index=0)
     if pick2:
         s_cfg = next(s for s in stocks if str(s["ticker"]) == names2[pick2])
-        it = analyze_stock(names2[pick2], s_cfg, config)
+        it = analyze_stock(names2[pick2], s_cfg, config, STAMP)
         if it["error"]:
             st.error(it["error"])
         else:
@@ -286,13 +303,16 @@ with tab_roi:
                                    int(config.get("history_years", 5)), use_cache=True)
             stock_ccy = data.currency or ("TWD" if s_cfg["market"] == "TW" else "USD")
             if cap_ccy != stock_ccy:
-                config.setdefault("fx", {})["USDTWD"] = providers.usd_twd(
+                config.setdefault("fx", {})["USDTWD"] = fx_usd_twd(
                     config.get("fx", {}).get("USDTWD", 32.0))
             r = scenario_roi(s_cfg, data, it["zones"], amount, config, capital_currency=cap_ccy)
             if "error" in r:
                 st.error(r["error"])
             else:
-                sh = f"{int(r['shares']):,} 股" if r["market"] == "TW" else f"{r['shares']:,.3f} 股"
+                if r["market"] == "TW":
+                    _n = int(r["shares"]); sh = f"{_n:,} 股({_n // 1000} 張+{_n % 1000} 股)"
+                else:
+                    sh = f"{r['shares']:,.3f} 股"
                 st.markdown(f"投入 **{money(r['spent'], r['stock_ccy'])}** → 買進 **{sh}** @ {money(r['price'], r['stock_ccy'])}")
                 if r["fx_note"]:
                     st.warning(f"跨幣別:資金 {r['cap_ccy']} ≠ 標的 {r['stock_ccy']}(USD/TWD≈{r['fx_usdtwd']:.2f}),含匯率風險")
@@ -312,8 +332,14 @@ with tab_roi:
 with tab_screen:
     st.markdown("依「距便宜價需跌幅」排序,越上面越接近便宜。")
     items = build_all(stocks, config, mf)
-    ranked = sorted([it for it in items if it["analysis"]],
-                    key=lambda it: (not it["analysis"]["is_buy"], it["analysis"]["drop_to_cheap_pct"]))
+    valid = [it for it in items if it["analysis"]]
+    skipped = [it for it in items if not it["analysis"]]
+    if skipped:
+        st.caption(f"⚠ {len(skipped)} 檔無法估價已略過:{'、'.join(it['name'] for it in skipped)}")
+    # 次級鍵 gap_to_cheap_pct(已便宜者越負越前)讓同為「已便宜」的標的依跌破深度排序
+    ranked = sorted(valid, key=lambda it: (not it["analysis"]["is_buy"],
+                                           it["analysis"]["drop_to_cheap_pct"],
+                                           it["analysis"]["gap_to_cheap_pct"]))
     for it in ranked:
         a, z, d = it["analysis"], it["zones"], it["data"]
         emoji = "🟢" if a["is_buy"] else ("🟡" if a["drop_to_cheap_pct"] < 15 else "🔴")
@@ -343,16 +369,21 @@ with tab_alloc:
         st.caption("可直接編輯權重(會自動正規化為 100%):")
         edited = st.data_editor(
             pd.DataFrame({"標的": picks, "權重%": [eqw] * len(picks)}),
-            hide_index=True, use_container_width=True, disabled=["標的"], key="alloc_w",
+            hide_index=True, width="stretch", disabled=["標的"], key="alloc_w",
             column_config={"權重%": st.column_config.NumberColumn(min_value=0.0, format="%.1f")})
-        wsum = float(edited["權重%"].sum()) or 1.0
-        fx = providers.usd_twd(config.get("fx", {}).get("USDTWD", 32.0))
+        raw_sum = float(edited["權重%"].sum())
+        if raw_sum <= 0:
+            st.warning("權重總和為 0,請至少給一檔正權重。")
+            st.stop()
+        st.caption(f"目前權重總和 {raw_sum:.0f}% → 自動正規化為 100%")
+        wsum = raw_sum
+        fx = fx_usd_twd(config.get("fx", {}).get("USDTWD", 32.0))
         rows, blended_yield, cheap_ct, maxw = [], 0.0, 0, 0.0
         for _, rr in edited.iterrows():
             nm = rr["標的"]; tk = opts[nm]; w = float(rr["權重%"]) / wsum
             maxw = max(maxw, w)
             cfg = next(s for s in stocks if str(s["ticker"]) == tk)
-            it = analyze_stock(tk, cfg, config)
+            it = analyze_stock(tk, cfg, config, STAMP)
             alloc = total * w
             if it["error"]:
                 rows.append({"標的": nm, "權重": f"{w*100:.1f}%", "配置金額": money(alloc, acc),
@@ -364,17 +395,19 @@ with tab_alloc:
                        alloc / fx if (acc == "TWD" and sccy == "USD") else
                        alloc * fx if (acc == "USD" and sccy == "TWD") else alloc)
             shares = (alloc_s / d["price"]) if d["price"] else 0
+            shares_disp = (f"{int(shares):,} 股({int(shares)//1000}張)"
+                           if cfg["market"] == "TW" else f"{shares:,.2f}")
             dy = d.get("dividend_yield") or 0
             blended_yield += w * dy
             cheap_ct += 1 if a["is_buy"] else 0
             rows.append({"標的": nm, "權重": f"{w*100:.1f}%", "配置金額": money(alloc, acc),
-                         "估算股數": f"{shares:,.1f}", "價位": a["region"],
+                         "估算股數": shares_disp, "價位": a["region"],
                          "殖利率": f"{dy*100:.1f}%" if dy else "—"})
         dfa = pd.DataFrame(rows)
         st.dataframe(
             dfa.style.map(lambda v: f"color:white;background-color:{REGION_HEX.get(v,'#888')}"
                           if v in REGION_HEX else "", subset=["價位"]),
-            hide_index=True, use_container_width=True)
+            hide_index=True, width="stretch")
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("總投入", money(total, acc))
         m2.metric("加權現金殖利率", f"{blended_yield*100:.2f}%")
@@ -387,7 +420,7 @@ with tab_alloc:
                                    values=[float(r["權重"].rstrip('%')) for r in rows], hole=0.45))
             fig.update_layout(height=360, margin=dict(l=10, r=10, t=10, b=10),
                               title="配置權重")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         st.caption("配置金額＝總資金×正規化權重;估算股數＝配置金額(換匯後)÷現價之概估,未扣手續費。"
                    "加權殖利率為各檔現金殖利率按權重加權。跨幣別已用即時匯率換算。")
 

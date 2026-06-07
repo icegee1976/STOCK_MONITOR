@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 ZONE_KEYS = ["super_bargain", "cheap", "fair", "expensive", "euphoria"]
 ZONE_LABEL = {
@@ -49,7 +49,6 @@ def _auto_bands_from_history(history_pairs, percentiles: dict) -> dict:
 
 def _yield_history(price_history, div_history) -> list:
     """歷史現金殖利率序列:每個交易日 = 近12月現金配息 / 當日收盤。"""
-    from datetime import datetime, timedelta
     if not price_history or not div_history:
         return []
     out = []
@@ -152,6 +151,13 @@ def compute_zones(stock_cfg: dict, data, config: dict) -> dict:
                       anchor_kind="股價分布",
                       assumptions=f"過去約{yrs}年股價分布百分位")
         warnings.append("price_band 純看歷史股價分布,不含未來成長假設")
+        # 市值型/大盤/全球指數長期上漲 → 多半落在歷史高百分位而顯示偏貴,
+        # 但這不是擇時賣出訊號,此類核心 ETF 一般採定期定額(DCA)。
+        theme = stock_cfg.get("theme", []) or []
+        if any(t in ("市值型", "大盤", "美股大盤", "全球", "已開發市場", "新興市場",
+                     "美股科技", "累積") for t in theme):
+            warnings.append("大盤/市值型指數:長期上漲使其多半顯示偏貴,這不是賣出訊號;"
+                            "此類核心 ETF 通常採定期定額(DCA),不宜以價格帶擇時")
 
     elif method == "yield_band":
         # 殖利率河流圖(適合高股息 ETF):高殖利率=便宜。zones = 年化配息 / 殖利率帶。
@@ -168,6 +174,8 @@ def compute_zones(stock_cfg: dict, data, config: dict) -> dict:
             yb = {k: _percentile(ys, 100 - pctl[k]) for k in ZONE_KEYS}
         else:
             yb = {k: float(yb[k]) for k in ZONE_KEYS}
+        if any(yb[k] <= 0 for k in ZONE_KEYS):     # 防手動 yield_bands 填 0/負 → 除零崩潰
+            raise ValuationError("殖利率帶含 0 或負值,無法計算(請檢查 yield_bands,須為正小數如 0.07)")
         zones = {k: round(annual_div / yb[k], 2) for k in ZONE_KEYS}
         cur_yield = (annual_div / data.price) if data.price else None
         result.update(zones=zones, target_year=None, anchor=round(annual_div, 4),

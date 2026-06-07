@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import math
 import statistics
-from datetime import datetime
 
 from .valuation import ZONE_KEYS, ZONE_LABEL
 

@@ -64,8 +64,8 @@ def _load_cache(market: str, ticker: str, max_age_min: float):
         with open(p, "r", encoding="utf-8") as f:
             blob = json.load(f)
         fetched = datetime.fromisoformat(blob["_fetched_at"])
-        if datetime.now() - fetched > timedelta(minutes=max_age_min):
-            return None
+        if max_age_min is not None and datetime.now() - fetched > timedelta(minutes=max_age_min):
+            return None  # max_age_min=None 表示「無視 TTL」(過期快取保命用)
         blob.pop("_fetched_at", None)
         return StockData(**blob)
     except Exception:
@@ -85,10 +85,25 @@ def _save_cache(data: StockData):
 # --------------------------------------------------------------------------- #
 #  HTTP 小工具
 # --------------------------------------------------------------------------- #
+def _retry(fn, attempts: int = 3, base_delay: float = 0.8):
+    """重試包裝:對抗暫時性網路/限流(雲端機房 IP 的 yfinance 常被 Yahoo 429)。指數退避。"""
+    last = None
+    for i in range(attempts):
+        try:
+            return fn()
+        except Exception as e:
+            last = e
+            if i < attempts - 1:
+                time.sleep(base_delay * (2 ** i))
+    raise last
+
+
 def _http_get_json(url: str, timeout: int = 25) -> dict:
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (aimonitor)"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode("utf-8"))
+    def _do():
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (aimonitor)"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    return _retry(_do, attempts=3)
 
 
 # --------------------------------------------------------------------------- #
@@ -109,34 +124,34 @@ def _finmind(dataset: str, data_id: str, start_date: str, token: str = "") -> li
 
 
 def _back_adjust_tw(price_history, div_history):
-    """還原分割/反分割。台股漲跌幅±10%,故隔日收盤跳動 >~18% 必是分割等公司行為。
-    把斷層「之前」的價與配息乘上跳動比例,還原到現今股數尺度,使序列連續。
-    修正 price_band 百分位、年化波動率、殖利率河流圖(否則 0050 這類分割股會嚴重失真)。"""
+    """還原分割/反分割。真正的拆股是整數倍(1:2→r≈0.5、1:4→r≈0.25、反分割→r≥2);
+    除息/除權當日也跳空但幅度小很多。為避免把高股息 ETF/個股的大額除息誤判成分割,
+      (1) 門檻收緊到 r<0.6 或 r>1.7,避開 6~40% 的除權息雜訊;
+      (2) 額外排除「現金除息日」(該日跳空是配息,不是分割)。
+    把斷層之前的價與配息還原到現尺度,修正 price_band 百分位/波動率/殖利率河流圖。"""
+    price_history = sorted(price_history)          # 確保升冪(f_for 的查找依賴此前提)
     n = len(price_history)
     if n < 2:
         return price_history, div_history
+    ex_dates = {ex for ex, _ in div_history}       # 現金除息日:跳空屬配息,非分割
     factor = [1.0] * n
     cum = 1.0
     for i in range(n - 1, 0, -1):
         prev = price_history[i - 1][1]
         cur = price_history[i][1]
-        if prev and cur:
+        if prev and cur and price_history[i][0] not in ex_dates:
             r = cur / prev
-            if r < 0.85 or r > 1.18:          # 疑似分割(0.25=1:4 拆、2.0=反分割)
+            if r < 0.6 or r > 1.7:                 # 只認真正的整數倍拆/反拆
                 cum *= r
         factor[i - 1] = cum
     adj_px = [(d, (c * factor[i]) if c else c) for i, (d, c) in enumerate(price_history)]
     if not div_history:
         return adj_px, div_history
-    # 配息套用「該除息日所屬」的 factor(分割前配息也換算到現尺度)
-    def f_for(date):
-        f = factor[0]
-        for i, (d, _) in enumerate(price_history):
-            if d <= date:
-                f = factor[i]
-            else:
-                break
-        return f
+    import bisect
+    dates = [d for d, _ in price_history]
+    def f_for(date):                                # 該除息日所屬的 factor(二分查找)
+        j = bisect.bisect_right(dates, date) - 1
+        return factor[j] if j >= 0 else factor[0]
     adj_div = [(ex, cash * f_for(ex)) for ex, cash in div_history]
     return adj_px, adj_div
 
@@ -201,7 +216,7 @@ def fetch_us(ticker: str, name: str, years: int) -> StockData:
         return d
     try:
         t = yf.Ticker(ticker)
-        hist = t.history(period=f"{max(years,1)}y", auto_adjust=True)
+        hist = _retry(lambda: t.history(period=f"{max(years,1)}y", auto_adjust=True), attempts=3)
         if hist is not None and len(hist):
             d.price_history = [(idx.strftime("%Y-%m-%d"), float(c))
                                for idx, c in zip(hist.index, hist["Close"])]
@@ -275,6 +290,14 @@ def fetch(stock_cfg: dict, providers_cfg: dict, history_years: int, use_cache: b
 
     if data.ok():
         _save_cache(data)
+        return data
+    # 線上抓取失敗(雲端常因 yfinance 被限流)→ 退回任何「過期」快取保命:
+    # 顯示上次成功抓到的資料(標記為過期快取),好過整檔變「錯誤」消失。
+    stale = _load_cache(market, ticker, None)   # None = 無視 TTL
+    if stale is not None and stale.ok():
+        if "快取" not in (stale.source or ""):
+            stale.source = f"{stale.source}(過期快取)"
+        return stale
     return data
 
 

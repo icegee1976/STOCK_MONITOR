@@ -154,7 +154,10 @@ def render_roi(r, config):
         return
     _p()
     _p(f"[bold]══ 投報率情境試算:{r['name']} ({r['ticker']}) ══[/bold]")
-    sh = f"{int(r['shares']):,} 股" if r['market'] == "TW" else f"{r['shares']:,.3f} 股(可碎股)"
+    if r['market'] == "TW":
+        _n = int(r['shares']); sh = f"{_n:,} 股({_n // 1000} 張+{_n % 1000} 股)"
+    else:
+        sh = f"{r['shares']:,.3f} 股(可碎股)"
     _p(f"  投入 {money(r['spent'], r['stock_ccy'])} → 買進 {sh}  @ {money(r['price'], r['stock_ccy'])}")
     if r["fx_note"]:
         _p(f"  [yellow]匯率:資金幣別 {r['cap_ccy']} ≠ 標的幣別 {r['stock_ccy']} "
