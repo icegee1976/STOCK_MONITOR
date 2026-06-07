@@ -169,10 +169,10 @@ def roi_bar(r):
 # --------------------------------------------------------------------------- #
 #  主程式
 # --------------------------------------------------------------------------- #
-st.set_page_config(page_title="AI 護國群山 監測器", layout="wide", page_icon="📈")
+st.set_page_config(page_title="成長股／ETF 監測器", layout="wide", page_icon="📈")
 config, stocks = load_config()
 
-st.title("📈 AI 護國群山 — 美股／台股 AI＋太空 成長股監測器")
+st.title("📈 美股／台股 AI＋太空 成長股／ETF 監測器")
 st.caption("孫慶龍《AI 護國群山投資藍圖》方法論 × Computex 產業觀察。⚠ 資訊／教育用途,非投資建議;免費數據為延遲報價。")
 
 with st.sidebar:

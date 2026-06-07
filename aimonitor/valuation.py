@@ -47,6 +47,26 @@ def _auto_bands_from_history(history_pairs, percentiles: dict) -> dict:
     return {k: round(_percentile(vals, percentiles[k]), 4) for k in ZONE_KEYS}
 
 
+def _yield_history(price_history, div_history) -> list:
+    """歷史現金殖利率序列:每個交易日 = 近12月現金配息 / 當日收盤。"""
+    from datetime import datetime, timedelta
+    if not price_history or not div_history:
+        return []
+    out = []
+    for date, price in price_history:
+        if not price or price <= 0:
+            continue
+        try:
+            dt = datetime.strptime(date, "%Y-%m-%d")
+        except Exception:
+            continue
+        lo = (dt - timedelta(days=365)).strftime("%Y-%m-%d")
+        ttm = sum(c for ex, c in div_history if lo < ex <= date)
+        if ttm > 0:
+            out.append(ttm / price)
+    return out
+
+
 def _forward_eps(val_cfg: dict) -> tuple[float, int, str]:
     """回傳 (forward_eps, target_year, 說明)。"""
     if "forward_eps" in val_cfg and val_cfg["forward_eps"] is not None:
@@ -132,6 +152,30 @@ def compute_zones(stock_cfg: dict, data, config: dict) -> dict:
                       anchor_kind="股價分布",
                       assumptions=f"過去約{yrs}年股價分布百分位")
         warnings.append("price_band 純看歷史股價分布,不含未來成長假設")
+
+    elif method == "yield_band":
+        # 殖利率河流圖(適合高股息 ETF):高殖利率=便宜。zones = 年化配息 / 殖利率帶。
+        annual_div = data.annual_dividend
+        if not annual_div or annual_div <= 0:
+            raise ValuationError("無年化配息資料,無法用殖利率法(可改 price_band)")
+        yb = val.get("yield_bands", "auto")
+        auto = (yb == "auto")
+        if auto:
+            ys = sorted(_yield_history(data.price_history, data.div_history))
+            if len(ys) < 30:
+                raise ValuationError(f"殖利率歷史樣本不足({len(ys)}),請改明確 yield_bands 或 price_band")
+            # 高殖利率=便宜 → 反轉百分位(super_bargain 取最高殖利率端)
+            yb = {k: _percentile(ys, 100 - pctl[k]) for k in ZONE_KEYS}
+        else:
+            yb = {k: float(yb[k]) for k in ZONE_KEYS}
+        zones = {k: round(annual_div / yb[k], 2) for k in ZONE_KEYS}
+        cur_yield = (annual_div / data.price) if data.price else None
+        result.update(zones=zones, target_year=None, anchor=round(annual_div, 4),
+                      anchor_kind="年化配息", yield_bands={k: round(yb[k], 4) for k in ZONE_KEYS},
+                      assumptions=f"年化配息={annual_div:.3f};殖利率河流圖" + ("(auto)" if auto else ""),
+                      implied_multiple=round(cur_yield * 100, 2) if cur_yield else None,
+                      implied_kind="現金殖利率%")
+        warnings.append("ETF 配息可能含收益平準金,殖利率或虛高;配息金額亦會變動")
 
     else:
         raise ValuationError(f"未知估價法: {method}")

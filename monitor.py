@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""AI 護國群山 — 美股/台股 AI+太空 成長股價格帶監測器 (CLI 入口)。
+"""美股/台股 AI+太空 成長股與 ETF 價格帶監測器 (CLI 入口)。
 
 用法:
   python monitor.py report                 # 全清單價格帶報表
@@ -200,7 +200,7 @@ def cmd_watch(args, config, stocks):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="AI 護國群山 — 美股/台股 成長股價格帶監測器")
+    ap = argparse.ArgumentParser(description="美股/台股 成長股與 ETF 價格帶監測器")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("report", help="價格帶報表")

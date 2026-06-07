@@ -83,9 +83,13 @@ def render_stock_card(item, config):
     _p(f"  假設: {z['assumptions']}")
     # 現價隱含的倍數 — 讓你一眼判斷「假設是否合理」
     if z.get("implied_multiple") is not None:
+        yb = z.get("yield_bands")
         bands = z.get("pe_bands") or z.get("ps_bands")
         extra = ""
-        if isinstance(bands, dict):
+        if isinstance(yb, dict):                       # 殖利率法:顯示便宜/瘋狂所需殖利率
+            extra = (f"  (便宜需殖利率≈{float(yb['cheap'])*100:.1f}% / "
+                     f"瘋狂≈{float(yb['euphoria'])*100:.1f}%)")
+        elif isinstance(bands, dict):
             extra = (f"  (你的便宜帶≈{float(bands['cheap']):.0f} / "
                      f"瘋狂帶≈{float(bands['euphoria']):.0f})")
         _p(f"  現價隱含 {z.get('implied_kind','倍數')} ≈ [bold]{z['implied_multiple']}[/bold]{extra}")
@@ -111,7 +115,7 @@ def render_stock_card(item, config):
 def render_summary(rows, config):
     _p()
     if HAS_RICH:
-        t = Table(title="AI 護國群山 — 監測摘要 (依距便宜價排序)", box=box.SIMPLE_HEAVY)
+        t = Table(title="監測摘要 (依距便宜價排序)", box=box.SIMPLE_HEAVY)
         for col in ["標的", "代號", "現價", "價位", "距便宜", "1年觸及機率", "錨點"]:
             t.add_column(col)
         for it in rows:

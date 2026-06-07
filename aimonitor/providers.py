@@ -35,6 +35,8 @@ class StockData:
     shares: float | None = None
     revenue_ttm: float | None = None
     dividend_yield: float | None = None   # 以「比例」表示, 0.0093 = 0.93%
+    annual_dividend: float | None = None  # 近12月現金配息(每單位),供 ETF 殖利率法
+    div_history: list = field(default_factory=list)     # [(除息日, 現金配息), ...]
     price_history: list = field(default_factory=list)   # [(date, close), ...] 舊→新
     per_history: list = field(default_factory=list)     # [(date, per), ...]
     per_history_approx: bool = False  # 美股的 PER 河流圖是近似(price/現EPS)
@@ -106,6 +108,39 @@ def _finmind(dataset: str, data_id: str, start_date: str, token: str = "") -> li
     return j.get("data", [])
 
 
+def _back_adjust_tw(price_history, div_history):
+    """還原分割/反分割。台股漲跌幅±10%,故隔日收盤跳動 >~18% 必是分割等公司行為。
+    把斷層「之前」的價與配息乘上跳動比例,還原到現今股數尺度,使序列連續。
+    修正 price_band 百分位、年化波動率、殖利率河流圖(否則 0050 這類分割股會嚴重失真)。"""
+    n = len(price_history)
+    if n < 2:
+        return price_history, div_history
+    factor = [1.0] * n
+    cum = 1.0
+    for i in range(n - 1, 0, -1):
+        prev = price_history[i - 1][1]
+        cur = price_history[i][1]
+        if prev and cur:
+            r = cur / prev
+            if r < 0.85 or r > 1.18:          # 疑似分割(0.25=1:4 拆、2.0=反分割)
+                cum *= r
+        factor[i - 1] = cum
+    adj_px = [(d, (c * factor[i]) if c else c) for i, (d, c) in enumerate(price_history)]
+    if not div_history:
+        return adj_px, div_history
+    # 配息套用「該除息日所屬」的 factor(分割前配息也換算到現尺度)
+    def f_for(date):
+        f = factor[0]
+        for i, (d, _) in enumerate(price_history):
+            if d <= date:
+                f = factor[i]
+            else:
+                break
+        return f
+    adj_div = [(ex, cash * f_for(ex)) for ex, cash in div_history]
+    return adj_px, adj_div
+
+
 def fetch_tw(ticker: str, name: str, years: int, token: str = "") -> StockData:
     start = (datetime.now() - timedelta(days=int(years * 365.25) + 10)).strftime("%Y-%m-%d")
     d = StockData(ticker=ticker, market="TW", name=name, currency="TWD", source="FinMind")
@@ -130,6 +165,27 @@ def fetch_tw(ticker: str, name: str, years: int, token: str = "") -> StockData:
                 d.trailing_eps = round(d.price / d.per, 4)  # EPS = 股價 / 本益比
     except Exception:
         pass  # PER 拿不到不致命,價格帶可改用 price_band
+    # 配息(ETF 殖利率法 / ROI 用)。ETF 無 PER,故 dividend_yield 改由此推。
+    try:
+        div = _finmind("TaiwanStockDividend", ticker, start, token)
+        hist = []
+        for r in div:
+            ex = r.get("CashExDividendTradingDate") or ""
+            cash = (r.get("CashEarningsDistribution") or 0) + (r.get("CashStatutorySurplus") or 0)
+            if ex and cash:
+                hist.append((ex, float(cash)))
+        d.div_history = sorted(hist)
+    except Exception:
+        pass
+    # 還原分割(總是執行,即使無配息也要修正分割股的價格序列)
+    d.price_history, d.div_history = _back_adjust_tw(d.price_history, d.div_history)
+    if d.price_history:
+        d.price = d.price_history[-1][1]
+    cutoff = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+    if d.div_history:
+        d.annual_dividend = round(sum(c for ex, c in d.div_history if ex > cutoff), 4)
+        if d.annual_dividend and d.price and not d.dividend_yield:
+            d.dividend_yield = d.annual_dividend / d.price
     return d
 
 
@@ -170,6 +226,7 @@ def fetch_us(ticker: str, name: str, years: int) -> StockData:
                 dy = rate / d.price
         if dy is not None:
             d.dividend_yield = dy if dy < 1 else dy / 100.0  # 保險:>1 必是百分數誤填
+        d.annual_dividend = _f(info.get("trailingAnnualDividendRate")) or _f(info.get("dividendRate"))
         cur = info.get("currency")
         if cur:
             d.currency = cur

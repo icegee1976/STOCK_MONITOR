@@ -209,3 +209,86 @@ stocks:
       ps_bands: { super_bargain: 4.5, cheap: 6.8, fair: 10, expensive: 14.5, euphoria: 21 }  # wide
     note: "國防/情報衛星影像，RPO +361%。  [校正 2026/6:現價隱含≈18.95x; verified]"
 
+# ============================================================
+#  台股 ETF / 基金
+#  ETF 沒有本益比,故用兩種法:
+#    market/主題型 → price_band(歷史股價分布百分位)
+#    高股息型      → yield_band(殖利率河流圖:高殖利率=便宜)
+# ============================================================
+
+# ---------- 市值型 / 主題型(股價分布法) ----------
+
+  - ticker: "0050"
+    market: TW
+    name: 元大台灣50
+    theme: [ETF, 市值型, 大盤]
+    valuation:
+      method: price_band
+      lookback_years: 5
+    note: "國民 ETF,追蹤台灣50指數≈大盤。殖利率僅~1.3%,故用股價分布而非殖利率法;近高點易顯示昂貴。"
+
+  - ticker: "006208"
+    market: TW
+    name: 富邦台50
+    theme: [ETF, 市值型, 大盤]
+    valuation:
+      method: price_band
+      lookback_years: 5
+    note: "同追台灣50,費用率低。可與 0050 二選一。"
+
+  - ticker: "00891"
+    market: TW
+    name: 中信關鍵半導體
+    theme: [ETF, 半導體, AI]
+    valuation:
+      method: price_band
+      lookback_years: 4
+    note: "半導體主題 ETF,對應 AI 供應鏈。配息含平準金,殖利率失真,故用股價分布法。"
+
+# ---------- 高股息(殖利率河流圖:便宜=殖利率高) ----------
+
+  - ticker: "0056"
+    market: TW
+    name: 元大高股息
+    theme: [ETF, 高股息]
+    valuation:
+      method: yield_band
+      yield_bands: auto       # 用歷史殖利率百分位自動推
+    note: "老牌高息 ETF,近12月殖利率~7%。買點=殖利率相對偏高時。"
+
+  - ticker: "00878"
+    market: TW
+    name: 國泰永續高股息
+    theme: [ETF, 高股息, ESG]
+    valuation:
+      method: yield_band
+      yield_bands: auto
+    note: "季配,存股族最愛之一,殖利率~5.8%。"
+
+  - ticker: "00919"
+    market: TW
+    name: 群益台灣精選高息
+    theme: [ETF, 高股息]
+    valuation:
+      method: yield_band
+      yield_bands: auto
+    note: "高殖利率~8.4%。⚠配息含平準金,殖利率可能虛高。"
+
+  - ticker: "00929"
+    market: TW
+    name: 復華台灣科技優息
+    theme: [ETF, 高股息, 科技]
+    valuation:
+      method: yield_band
+      yield_bands: auto
+    note: "月配科技優息,殖利率~3.8%。成分偏科技股,波動較大。"
+
+  - ticker: "00940"
+    market: TW
+    name: 元大臺灣價值高息
+    theme: [ETF, 高股息]
+    valuation:
+      method: yield_band
+      yield_bands: auto
+    note: "月配,價值選股,殖利率~4%。2024 上市,殖利率歷史較短。"
+
