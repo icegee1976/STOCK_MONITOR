@@ -343,3 +343,44 @@ stocks:
       lookback_years: 5
     note: "新興市場(含小型股)累積型。與 IWDA 約 9:1 可組全球配置。"
 
+# ============================================================
+#  台股上市的「美股指數」ETF(全球型替代品,免複委託)
+#  追蹤美國指數,以新台幣交易。低配息 → 用 price_band。
+# ============================================================
+
+  - ticker: "00646"
+    market: TW
+    name: 元大S&P500
+    theme: [ETF, 美股大盤, 台股掛牌]
+    valuation:
+      method: price_band
+      lookback_years: 5
+    note: "台股掛牌的 S&P500,免複委託、台幣交易。CSPX/VUAA 的在地替代。"
+
+  - ticker: "00662"
+    market: TW
+    name: 富邦NASDAQ
+    theme: [ETF, 美股科技, 台股掛牌]
+    valuation:
+      method: price_band
+      lookback_years: 5
+    note: "台股掛牌的 NASDAQ-100,科技權重高。"
+
+  - ticker: "00830"
+    market: TW
+    name: 國泰費城半導體
+    theme: [ETF, 半導體, AI, 台股掛牌]
+    valuation:
+      method: price_band
+      lookback_years: 5
+    note: "追蹤費城半導體指數(SOX),對應 AI 算力主軸的指數型曝險。"
+
+  - ticker: "00668"
+    market: TW
+    name: 國泰美國道瓊
+    theme: [ETF, 美股大盤, 台股掛牌]
+    valuation:
+      method: price_band
+      lookback_years: 5
+    note: "台股掛牌的道瓊工業指數。(註:你提的 00857『永豐美國500大』FinMind 查無資料,已以此替代;若有正確代碼我再加)"
+

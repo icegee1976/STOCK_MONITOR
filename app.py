@@ -173,7 +173,7 @@ st.set_page_config(page_title="成長股／ETF 監測器", layout="wide", page_i
 config, stocks = load_config()
 
 st.title("📈 美股／台股 AI＋太空 成長股／ETF 監測器")
-st.caption("孫慶龍《AI 護國群山投資藍圖》方法論 × Computex 產業觀察。⚠ 資訊／教育用途,非投資建議;免費數據為延遲報價。")
+st.caption("⚠ 資訊／教育用途,非投資建議;免費數據為延遲報價。")
 
 with st.sidebar:
     st.header("設定")
@@ -188,8 +188,8 @@ with st.sidebar:
     st.divider()
     st.caption("價格帶:大特價→便宜→合理→昂貴→瘋狂。進入便宜價(含)以下 = 提醒買進。")
 
-tab_overview, tab_stock, tab_roi, tab_screen = st.tabs(
-    ["📊 總覽", "🔍 個股河流圖", "💰 投報率試算", "🟢 便宜清單"])
+tab_overview, tab_stock, tab_roi, tab_screen, tab_alloc = st.tabs(
+    ["📊 總覽", "🔍 個股河流圖", "💰 投報率試算", "🟢 便宜清單", "📐 資產配置試算"])
 
 # ---------- 總覽 ----------
 with tab_overview:
@@ -326,6 +326,70 @@ with tab_screen:
                 col.metric(ZONE_LABEL[k] + ("⭐" if cur else ""), money(z["zones"][k], d["currency"]))
             st.caption(f"現價 {money(d['price'], d['currency'])} ｜ 錨點 {z.get('anchor_kind')}={z.get('anchor')}"
                        + (f" ｜ 隱含{z.get('implied_kind','')} {z.get('implied_multiple')}" if z.get("implied_multiple") else ""))
+
+# ---------- 資產配置試算 ----------
+with tab_alloc:
+    st.markdown("挑幾檔組成投組,設定權重與總資金,看配置金額、估算股數與整體狀態。")
+    opts = {f"{s.get('name','')} ({s['ticker']})": str(s["ticker"]) for s in stocks}
+    ca, cb = st.columns([3, 2])
+    picks = ca.multiselect("選擇持有標的(可多選)", list(opts.keys()), key="alloc_pick")
+    total = cb.number_input("總投入資金", min_value=1000.0, value=1000000.0, step=10000.0, key="alloc_total")
+    acc = cb.selectbox("資金幣別", ["TWD", "USD"], index=0, key="alloc_ccy")
+    if not picks:
+        st.info("請先選至少一檔。例:VWRA(全球)+ 0050(台股)+ 0056(高息)組核心配置。")
+    else:
+        import pandas as pd
+        eqw = round(100.0 / len(picks), 2)
+        st.caption("可直接編輯權重(會自動正規化為 100%):")
+        edited = st.data_editor(
+            pd.DataFrame({"標的": picks, "權重%": [eqw] * len(picks)}),
+            hide_index=True, use_container_width=True, disabled=["標的"], key="alloc_w",
+            column_config={"權重%": st.column_config.NumberColumn(min_value=0.0, format="%.1f")})
+        wsum = float(edited["權重%"].sum()) or 1.0
+        fx = providers.usd_twd(config.get("fx", {}).get("USDTWD", 32.0))
+        rows, blended_yield, cheap_ct, maxw = [], 0.0, 0, 0.0
+        for _, rr in edited.iterrows():
+            nm = rr["標的"]; tk = opts[nm]; w = float(rr["權重%"]) / wsum
+            maxw = max(maxw, w)
+            cfg = next(s for s in stocks if str(s["ticker"]) == tk)
+            it = analyze_stock(tk, cfg, config)
+            alloc = total * w
+            if it["error"]:
+                rows.append({"標的": nm, "權重": f"{w*100:.1f}%", "配置金額": money(alloc, acc),
+                             "估算股數": "—", "價位": "錯誤", "殖利率": "—"})
+                continue
+            d, a = it["data"], it["analysis"]
+            sccy = d["currency"]
+            alloc_s = (alloc if acc == sccy else
+                       alloc / fx if (acc == "TWD" and sccy == "USD") else
+                       alloc * fx if (acc == "USD" and sccy == "TWD") else alloc)
+            shares = (alloc_s / d["price"]) if d["price"] else 0
+            dy = d.get("dividend_yield") or 0
+            blended_yield += w * dy
+            cheap_ct += 1 if a["is_buy"] else 0
+            rows.append({"標的": nm, "權重": f"{w*100:.1f}%", "配置金額": money(alloc, acc),
+                         "估算股數": f"{shares:,.1f}", "價位": a["region"],
+                         "殖利率": f"{dy*100:.1f}%" if dy else "—"})
+        dfa = pd.DataFrame(rows)
+        st.dataframe(
+            dfa.style.map(lambda v: f"color:white;background-color:{REGION_HEX.get(v,'#888')}"
+                          if v in REGION_HEX else "", subset=["價位"]),
+            hide_index=True, use_container_width=True)
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("總投入", money(total, acc))
+        m2.metric("加權現金殖利率", f"{blended_yield*100:.2f}%")
+        m3.metric("便宜標的數", f"{cheap_ct}/{len(picks)}")
+        m4.metric("最大單一權重", f"{maxw*100:.0f}%")
+        if maxw > 0.4:
+            st.warning(f"集中度偏高:單一標的權重達 {maxw*100:.0f}%。適度分散可降個股風險。")
+        if HAS_PLOTLY:
+            fig = go.Figure(go.Pie(labels=[r["標的"] for r in rows],
+                                   values=[float(r["權重"].rstrip('%')) for r in rows], hole=0.45))
+            fig.update_layout(height=360, margin=dict(l=10, r=10, t=10, b=10),
+                              title="配置權重")
+            st.plotly_chart(fig, use_container_width=True)
+        st.caption("配置金額＝總資金×正規化權重;估算股數＝配置金額(換匯後)÷現價之概估,未扣手續費。"
+                   "加權殖利率為各檔現金殖利率按權重加權。跨幣別已用即時匯率換算。")
 
 st.divider()
 st.caption("⚠ 本工具僅作資訊／教育用途,不構成投資建議。所有估值建立在 watchlist.yaml 可修改的假設上;免費數據為延遲報價。投資請自負風險。")
