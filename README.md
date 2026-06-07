@@ -76,6 +76,26 @@ streamlit run app.py
 
 ---
 
+## ☁️ 部署到雲端（重要）
+
+> ❌ **不能用 Cloudflare Pages / Workers**：那是靜態網站／邊緣 JS 平台，**無法執行 Python 長駐伺服器**。本專案是 **Streamlit（Python server）**，Cloudflare 會自動猜框架（猜成 Hugo → `npx hugo` 失敗）。這不是 bug，是平台不相容。
+
+請改用**會跑 Python 的平台**：
+
+**推薦：Streamlit Community Cloud（免費，直接連 GitHub）**
+1. 到 <https://share.streamlit.io> 用 GitHub 登入
+2. New app → 選 repo `icegee1976/STOCK_MONITOR`、branch `main`、**Main file path `app.py`**
+3. 進階設定 Python 版本選 **3.11+**；`requirements.txt` 會自動安裝
+4. Deploy
+
+**其他選擇**：Hugging Face Spaces（Streamlit SDK）、Render／Railway／Fly.io（跑 `streamlit run app.py`）、或自己的 VPS。
+
+**⚠ 雲端數據限制（誠實提醒）**
+- **台股（FinMind）**：雲端可正常運作。
+- **美股／全球 ETF（yfinance）**：雲端機房 IP 常被 Yahoo 限流（HTTP 429），可能間歇抓不到。要穩定就改接付費報價源（Finnhub／Alpha Vantage 免費金鑰），或**乾脆在本機跑**（你家 IP 不會被限流）。
+
+---
+
 ## 4. 估價方法論（孫慶龍法的程式化）
 
 **核心**：成長股不適合用「殖利率法」算便宜價（它們幾乎不配息）。藍圖改用**前瞻本益比河流圖**：
