@@ -44,5 +44,6 @@ alert:
 providers:
   tw: finmind                 # 台股：FinMind (免金鑰可用，有 token 提高額度)
   us: yfinance                # 美股：yfinance 主，失敗自動降級
-  finmind_token: ""           # 選填，到 finmindtrade.com 註冊可拉高速率
+  finmind_token: ""           # 選填,提高速率(300→600/hr)。⚠勿把真 token commit;
+                              #   改設環境變數 FINMIND_TOKEN(或 Streamlit Cloud Secrets)更安全
   cache_minutes: 15           # 報價快取分鐘數，避免重複打 API

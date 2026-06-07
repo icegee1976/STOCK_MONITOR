@@ -282,7 +282,10 @@ def fetch(stock_cfg: dict, providers_cfg: dict, history_years: int, use_cache: b
             return cached
 
     if market == "TW":
-        data = fetch_tw(ticker, name, history_years, providers_cfg.get("finmind_token", ""))
+        # token 優先讀環境變數/Streamlit Secret(FINMIND_TOKEN),其次 config。
+        # 這樣金鑰不必寫進 repo,雲端額度也能從 300→600 次/小時。
+        token = os.environ.get("FINMIND_TOKEN") or providers_cfg.get("finmind_token", "")
+        data = fetch_tw(ticker, name, history_years, token)
     elif market in ("US", "INTL"):     # INTL = 全球型 UCITS ETF(倫敦 .L 等),亦走 yfinance
         data = fetch_us(ticker, name, history_years)
     else:
