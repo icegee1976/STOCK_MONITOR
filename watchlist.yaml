@@ -292,3 +292,54 @@ stocks:
       yield_bands: auto
     note: "月配,價值選股,殖利率~4%。2024 上市,殖利率歷史較短。"
 
+# ============================================================
+#  全球型 / 美股大盤 ETF(UCITS,倫敦上市 USD,累積型)
+#  累積型不配息 → 用 price_band(股價分布)。yfinance 以 .L 抓取,
+#  auto_adjust 已內含分割/配息還原。對台灣人:Ireland 籍稅務較優。
+# ============================================================
+
+  - ticker: "VWRA.L"
+    market: INTL
+    name: Vanguard FTSE All-World (VWRA)
+    theme: [ETF, 全球, 市值型, 累積]
+    valuation:
+      method: price_band
+      lookback_years: 5
+    note: "全球股(FTSE All-World,~3700 檔)累積型,台灣人最愛的單檔核心配置。USD 計價。"
+
+  - ticker: "VUAA.L"
+    market: INTL
+    name: Vanguard S&P 500 (VUAA)
+    theme: [ETF, 美股大盤, 累積]
+    valuation:
+      method: price_band
+      lookback_years: 5
+    note: "S&P500 累積型 UCITS。外國人股利預扣 15%(優於美國本土 30%)。"
+
+  - ticker: "CSPX.L"
+    market: INTL
+    name: iShares Core S&P 500 (CSPX)
+    theme: [ETF, 美股大盤, 累積]
+    valuation:
+      method: price_band
+      lookback_years: 5
+    note: "S&P500 累積型,VUAA 的替代品(規模更大)。USD 計價。"
+
+  - ticker: "IWDA.L"
+    market: INTL
+    name: iShares Core MSCI World (IWDA)
+    theme: [ETF, 全球, 已開發市場, 累積]
+    valuation:
+      method: price_band
+      lookback_years: 5
+    note: "MSCI World(23 個已開發國家)累積型,核心配置常見選擇。"
+
+  - ticker: "EIMI.L"
+    market: INTL
+    name: iShares Core MSCI EM IMI (EIMI)
+    theme: [ETF, 新興市場, 累積]
+    valuation:
+      method: price_band
+      lookback_years: 5
+    note: "新興市場(含小型股)累積型。與 IWDA 約 9:1 可組全球配置。"
+

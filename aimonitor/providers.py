@@ -268,7 +268,7 @@ def fetch(stock_cfg: dict, providers_cfg: dict, history_years: int, use_cache: b
 
     if market == "TW":
         data = fetch_tw(ticker, name, history_years, providers_cfg.get("finmind_token", ""))
-    elif market == "US":
+    elif market in ("US", "INTL"):     # INTL = 全球型 UCITS ETF(倫敦 .L 等),亦走 yfinance
         data = fetch_us(ticker, name, history_years)
     else:
         data = StockData(ticker=ticker, market=market, name=name, error=f"未知市場 {market}")
