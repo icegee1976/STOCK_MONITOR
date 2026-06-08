@@ -28,7 +28,7 @@ class StockData:
     market: str                       # "TW" | "US"
     name: str = ""
     currency: str = ""
-    price: float | None = None        # 最新收盤/即時價(延遲)
+    price: float | None = None        # 最新日收盤價(EOD;盤中:台股=昨收、美股≈延遲15分)
     price_date: str = ""
     trailing_eps: float | None = None # 近四季 EPS
     per: float | None = None          # 目前本益比
