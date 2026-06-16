@@ -36,6 +36,11 @@ try:
 except Exception:
     HAS_PLOTLY = False
 
+# Plotly 預設字型常不含 CJK → 中文標題/標籤會變亂碼(如「配置權重」→「比員催重」)。
+# 指定跨平台中文字型堆疊修正。
+PLOTLY_FONT = dict(family='"Microsoft JhengHei","PingFang TC","Noto Sans CJK TC",'
+                          '"Microsoft YaHei","Heiti TC",sans-serif')
+
 # 區域顏色 (低→高:綠→紅)
 REGION_HEX = {
     "大特價區": "#1b7a3d", "便宜價區": "#2e9e57", "合理價區": "#caa21a",
@@ -162,7 +167,7 @@ def river_chart(item):
                                          size=12, line=dict(color="white", width=1.5)),
                              name="現價"))
     fig.update_layout(height=460, margin=dict(l=10, r=120, t=30, b=10),
-                      yaxis_range=[lo, hi], showlegend=False,
+                      yaxis_range=[lo, hi], showlegend=False, font=PLOTLY_FONT,
                       title=f"{item['name']} 價格帶河流圖")
     st.plotly_chart(fig, width="stretch")
 
@@ -177,7 +182,7 @@ def roi_bar(r):
                              x=[f"{y}年" for y in horizons],
                              y=[row["annualized_pct"] for row in sc["rows"]]))
     fig.update_layout(barmode="group", height=380, title="各情境年化報酬 (%)",
-                      margin=dict(l=10, r=10, t=40, b=10),
+                      margin=dict(l=10, r=10, t=40, b=10), font=PLOTLY_FONT,
                       yaxis_title="年化報酬 %")
     st.plotly_chart(fig, width="stretch")
 
@@ -372,7 +377,10 @@ with tab_screen:
 
 # ---------- 資產配置試算 ----------
 with tab_alloc:
-    st.markdown("挑幾檔組成投組,設定權重與總資金,看配置金額、估算股數與整體狀態。")
+    st.markdown(
+        "**用途:把資金按比例分配到多檔標的,看整體投組長相。** "
+        "建議挑 **2 檔以上**(例:VWRA 全球 50% ＋ 0050 台股 30% ＋ 0056 高息 20%),"
+        "在下方表格調權重 → 立刻看到每檔配置金額、估算股數、目前價位,以及投組層級的加權殖利率與集中度。")
     opts = {f"{s.get('name','')} ({s['ticker']})": str(s["ticker"]) for s in stocks}
     ca, cb = st.columns([3, 2])
     picks = ca.multiselect("選擇持有標的(可多選)", list(opts.keys()), key="alloc_pick")
@@ -427,16 +435,22 @@ with tab_alloc:
             hide_index=True, width="stretch")
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("總投入", money(total, acc))
-        m2.metric("加權現金殖利率", f"{blended_yield*100:.2f}%")
-        m3.metric("便宜標的數", f"{cheap_ct}/{len(picks)}")
-        m4.metric("最大單一權重", f"{maxw*100:.0f}%")
-        if maxw > 0.4:
-            st.warning(f"集中度偏高:單一標的權重達 {maxw*100:.0f}%。適度分散可降個股風險。")
+        m2.metric("加權現金殖利率", f"{blended_yield*100:.2f}%",
+                  help="各標的現金殖利率以權重加權平均(累積型 ETF 約 0%)")
+        m3.metric("便宜標的數", f"{cheap_ct} / {len(picks)}",
+                  help="你選的標的中,目前落在『便宜價(含)以下』的檔數")
+        m4.metric("最大單一權重", f"{maxw*100:.0f}%",
+                  help="權重最高的單一標的占比;越高代表越集中、個股風險越大")
+        if len(picks) == 1:
+            st.info("ℹ️ 只選了 1 檔 = 集中投資單一標的(權重必為 100%)。"
+                    "資產配置試算在「**2 檔以上**」要看分散程度與整體狀態時最有用。")
+        elif maxw > 0.4:
+            st.warning(f"⚠ 集中度偏高:單一標的權重達 {maxw*100:.0f}%。適度分散可降個股風險。")
         if HAS_PLOTLY:
             fig = go.Figure(go.Pie(labels=[r["標的"] for r in rows],
                                    values=[float(r["權重"].rstrip('%')) for r in rows], hole=0.45))
-            fig.update_layout(height=360, margin=dict(l=10, r=10, t=10, b=10),
-                              title="配置權重")
+            fig.update_layout(height=360, margin=dict(l=10, r=10, t=40, b=10),
+                              title="配置權重(%)", font=PLOTLY_FONT)
             st.plotly_chart(fig, width="stretch")
         st.caption("配置金額＝總資金×正規化權重;估算股數＝配置金額(換匯後)÷現價之概估,未扣手續費。"
                    "加權殖利率為各檔現金殖利率按權重加權。跨幣別已用即時匯率換算。")
