@@ -316,16 +316,33 @@ with tab_roi:
                 st.markdown(f"投入 **{money(r['spent'], r['stock_ccy'])}** → 買進 **{sh}** @ {money(r['price'], r['stock_ccy'])}")
                 if r["fx_note"]:
                     st.warning(f"跨幣別:資金 {r['cap_ccy']} ≠ 標的 {r['stock_ccy']}(USD/TWD≈{r['fx_usdtwd']:.2f}),含匯率風險")
-                st.caption("情境:若未來股價回到各價格帶,持有 N 年的總報酬/年化。這是 if-then 模型,非保證。")
+                cur = r["price"]
+                st.info(f"📌 **目標價 ＞ 現價（{money(cur, r['stock_ccy'])}）才是獲利情境。** "
+                        f"低於現價的情境(如便宜價)代表股價『跌回』該價、賣出會虧 → 負報酬。\n\n"
+                        f"情境=若未來股價走到各價格帶並賣出,持有 N 年的總報酬/年化(if-then 模型,非保證;含股利與費稅)。")
                 roi_rows = []
                 for sc in r["scenarios"]:
-                    row = {"情境": sc["label"], "目標價": money(sc["target_price"], r["stock_ccy"])}
+                    diff = (sc["target_price"] - cur) / cur * 100 if cur else 0
+                    row = {"情境": sc["label"],
+                           "目標價": money(sc["target_price"], r["stock_ccy"]),
+                           "vs現價": f"{diff:+.0f}% {'▲需漲' if diff >= 0 else '▼需跌(會虧)'}"}
                     for rr in sc["rows"]:
                         row[f"{rr['years']}年總報酬"] = f"{rr['total_return_pct']:+.0f}%"
                         row[f"{rr['years']}年年化"] = f"{rr['annualized_pct']:+.0f}%"
                     roi_rows.append(row)
                 import pandas as pd
-                st.table(pd.DataFrame(roi_rows))
+                dfr = pd.DataFrame(roi_rows)
+
+                def _retcolor(v):                       # 正綠負紅,一眼看出賺賠
+                    s = str(v).strip()
+                    if s.startswith("-"):
+                        return "color:#d2412f; font-weight:600"
+                    if s.startswith("+") and not s.startswith("+0%"):
+                        return "color:#1b7a3d"
+                    return ""
+                _cols = [c for c in dfr.columns if "報酬" in c or "年化" in c or c == "vs現價"]
+                st.dataframe(dfr.style.map(_retcolor, subset=_cols),
+                             hide_index=True, width="stretch")
                 roi_bar(r)
 
 # ---------- 便宜清單 ----------
