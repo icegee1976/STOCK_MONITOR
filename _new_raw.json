@@ -1,0 +1,243 @@
+{
+ "US": {
+  "SPCX": {
+   "price": 178.86,
+   "fwdEps": -0.09,
+   "trailEps": -0.67,
+   "fwdPE": -1985.1665,
+   "shares": 7571396888,
+   "ccy": "USD",
+   "revGrowth": 0.154,
+   "name": "Space Exploration Technolo",
+   "has_hist": true
+  },
+  "XOVR": {
+   "price": 20.1911,
+   "fwdEps": null,
+   "trailEps": null,
+   "fwdPE": null,
+   "shares": null,
+   "ccy": "USD",
+   "revGrowth": null,
+   "name": "ERShares Private-Public Cr",
+   "has_hist": true
+  },
+  "UFO": {
+   "price": 49.675,
+   "fwdEps": null,
+   "trailEps": null,
+   "fwdPE": null,
+   "shares": null,
+   "ccy": "USD",
+   "revGrowth": null,
+   "name": "Procure Space ETF",
+   "has_hist": true
+  },
+  "NOC": {
+   "price": 543.09,
+   "fwdEps": 30.13849,
+   "trailEps": 31.92,
+   "fwdPE": 18.019815,
+   "shares": 142033476,
+   "ccy": "USD",
+   "revGrowth": 0.044,
+   "name": "Northrop Grumman Corporati",
+   "has_hist": true
+  },
+  "LMT": {
+   "price": 529.155,
+   "fwdEps": 32.09004,
+   "trailEps": 20.63,
+   "fwdPE": 16.489698,
+   "shares": 230563608,
+   "ccy": "USD",
+   "revGrowth": 0.003,
+   "name": "Lockheed Martin Corporatio",
+   "has_hist": true
+  },
+  "VST": {
+   "price": 160.92,
+   "fwdEps": 10.98725,
+   "trailEps": 5.98,
+   "fwdPE": 14.646067,
+   "shares": 337182468,
+   "ccy": "USD",
+   "revGrowth": 0.434,
+   "name": "Vistra Corp.",
+   "has_hist": true
+  },
+  "CEG": {
+   "price": 269.87,
+   "fwdEps": 13.54512,
+   "trailEps": 11.5,
+   "fwdPE": 19.92378,
+   "shares": 357102017,
+   "ccy": "USD",
+   "revGrowth": 0.638,
+   "name": "Constellation Energy Corpo",
+   "has_hist": true
+  },
+  "GEV": {
+   "price": 1094.056,
+   "fwdEps": 24.51159,
+   "trailEps": 34.19,
+   "fwdPE": 44.636436,
+   "shares": 268719995,
+   "ccy": "USD",
+   "revGrowth": 0.163,
+   "name": "GE Vernova Inc.",
+   "has_hist": true
+  },
+  "OKLO": {
+   "price": 59.24,
+   "fwdEps": -0.83374,
+   "trailEps": -0.84,
+   "fwdPE": -71.05333,
+   "shares": 173990987,
+   "ccy": "USD",
+   "revGrowth": null,
+   "name": "Oklo Inc.",
+   "has_hist": true
+  },
+  "SMR": {
+   "price": 10.52,
+   "fwdEps": -0.67011,
+   "trailEps": -2.2,
+   "fwdPE": -15.698916,
+   "shares": 346105785,
+   "ccy": "USD",
+   "revGrowth": -0.958,
+   "name": "NuScale Power Corporation",
+   "has_hist": true
+  },
+  "MSFT": {
+   "price": 373.73,
+   "fwdEps": 19.3459,
+   "trailEps": 16.78,
+   "fwdPE": 19.318306,
+   "shares": 7428434704,
+   "ccy": "USD",
+   "revGrowth": 0.183,
+   "name": "Microsoft Corporation",
+   "has_hist": true
+  },
+  "GOOGL": {
+   "price": 359.62,
+   "fwdEps": 14.48061,
+   "trailEps": 13.1,
+   "fwdPE": 24.834589,
+   "shares": 5867155790,
+   "ccy": "USD",
+   "revGrowth": 0.218,
+   "name": "Alphabet Inc.",
+   "has_hist": true
+  },
+  "AMZN": {
+   "price": 236.49,
+   "fwdEps": 9.85996,
+   "trailEps": 7.77,
+   "fwdPE": 23.984886,
+   "shares": 10757109436,
+   "ccy": "USD",
+   "revGrowth": 0.166,
+   "name": "Amazon.com, Inc.",
+   "has_hist": true
+  },
+  "META": {
+   "price": 564.16,
+   "fwdEps": 36.24596,
+   "trailEps": 27.49,
+   "fwdPE": 15.565597,
+   "shares": 2196045588,
+   "ccy": "USD",
+   "revGrowth": 0.331,
+   "name": "Meta Platforms, Inc.",
+   "has_hist": true
+  },
+  "PLTR": {
+   "price": 127.736,
+   "fwdEps": 2.08034,
+   "trailEps": 0.89,
+   "fwdPE": 61.401505,
+   "shares": 2296071334,
+   "ccy": "USD",
+   "revGrowth": 0.847,
+   "name": "Palantir Technologies Inc.",
+   "has_hist": true
+  },
+  "CRWV": {
+   "price": 117.62,
+   "fwdEps": -0.81023,
+   "trailEps": -2.72,
+   "fwdPE": -145.16866,
+   "shares": 447573939,
+   "ccy": "USD",
+   "revGrowth": 1.116,
+   "name": "CoreWeave, Inc.",
+   "has_hist": true
+  },
+  "NBIS": {
+   "price": 289.98,
+   "fwdEps": 0.36122,
+   "trailEps": 2.6,
+   "fwdPE": 801.09076,
+   "shares": 220406311,
+   "ccy": "USD",
+   "revGrowth": 6.839,
+   "name": "Nebius Group N.V.",
+   "has_hist": true
+  },
+  "DLR": {
+   "price": 188.765,
+   "fwdEps": 2.86414,
+   "trailEps": 3.77,
+   "fwdPE": 65.90634,
+   "shares": 351406070,
+   "ccy": "USD",
+   "revGrowth": 0.167,
+   "name": "Digital Realty Trust, Inc.",
+   "has_hist": true
+  }
+ },
+ "TW": {
+  "6285": {
+   "close": 274.0,
+   "PER": 40.41,
+   "name": "啟碁",
+   "trailEps": 6.78
+  },
+  "2314": {
+   "close": 14.95,
+   "PER": 0.0,
+   "name": "台揚"
+  },
+  "3491": {
+   "close": 1560.0,
+   "PER": 170.68,
+   "name": "昇達科",
+   "trailEps": 9.14
+  },
+  "2313": {
+   "close": 259.5,
+   "PER": 45.77,
+   "name": "華通",
+   "trailEps": 5.67
+  },
+  "6271": {
+   "close": 242.5,
+   "PER": 35.98,
+   "name": "同欣電",
+   "trailEps": 6.74
+  },
+  "00910": {
+   "close": 67.25,
+   "PER": null,
+   "name": "第一金太空衛星"
+  },
+  "00965": {
+   "close": 25.74,
+   "PER": null,
+   "name": "元大航太防衛科技"
+  }
+ }
+}

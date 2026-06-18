@@ -384,3 +384,239 @@ stocks:
       lookback_years: 5
     note: "台股掛牌的道瓊工業指數。(註:你提的 00857『永豐美國500大』FinMind 查無資料,已以此替代;若有正確代碼我再加)"
 
+
+# ============================================================
+#  AI 金字塔(黃仁勳五層)擴充 + 太空(含 SpaceX IPO)
+#  L1能源 / L3雲端資料中心 / L4基礎模型 / L5應用代理;太空個股+供應鏈+ETF
+#  pe_band: yfinance forward 共識;ps/price_band 見各檔。皆可改。
+# ============================================================
+
+  - ticker: "NOC"
+    market: US
+    name: Northrop Grumman
+    theme: [太空, 國防, 航太]
+    valuation:
+      method: pe_band
+      forward_eps: 30.14        # yfinance 共識 (fair P/E 18)
+      target_year: 2027
+      pe_bands: { super_bargain: 9.72, cheap: 12.42, fair: 18, expensive: 20.7, euphoria: 23.58 }  # standard
+    note: "航太國防+太空探測長約。yfinance fwdEps,請校正。"
+
+  - ticker: "LMT"
+    market: US
+    name: Lockheed Martin
+    theme: [太空, 國防, 航太]
+    valuation:
+      method: pe_band
+      forward_eps: 32.09        # yfinance 共識 (fair P/E 17)
+      target_year: 2027
+      pe_bands: { super_bargain: 9.18, cheap: 11.73, fair: 17, expensive: 19.55, euphoria: 22.27 }  # standard
+    note: "軍工龍頭,政府太空合約。"
+
+  - ticker: "VST"
+    market: US
+    name: Vistra
+    theme: [能源, AI電力, 金字塔L1]
+    valuation:
+      method: pe_band
+      forward_eps: 10.99        # yfinance 共識 (fair P/E 17)
+      target_year: 2027
+      pe_bands: { super_bargain: 7.65, cheap: 11.56, fair: 17, expensive: 24.65, euphoria: 35.7 }  # wide
+    note: "AI 金字塔底座:電力。資料中心電力需求受惠。"
+
+  - ticker: "CEG"
+    market: US
+    name: Constellation Energy
+    theme: [能源, 核電, AI電力, 金字塔L1]
+    valuation:
+      method: pe_band
+      forward_eps: 13.55        # yfinance 共識 (fair P/E 20)
+      target_year: 2027
+      pe_bands: { super_bargain: 9, cheap: 13.6, fair: 20, expensive: 29, euphoria: 42 }  # wide
+    note: "全美最大核電,簽 AI 資料中心供電長約。"
+
+  - ticker: "GEV"
+    market: US
+    name: GE Vernova
+    theme: [能源, 電網, 燃氣, 金字塔L1]
+    valuation:
+      method: pe_band
+      forward_eps: 24.51        # yfinance 共識 (fair P/E 38)
+      target_year: 2027
+      pe_bands: { super_bargain: 17.1, cheap: 25.84, fair: 38, expensive: 55.1, euphoria: 79.8 }  # wide
+    note: "電網+燃氣+核能設備,AI 用電擴張直接受惠。高成長。"
+
+  - ticker: "MSFT"
+    market: US
+    name: Microsoft
+    theme: [雲端, Azure, OpenAI, 金字塔L3, 金字塔L4]
+    valuation:
+      method: pe_band
+      forward_eps: 19.35        # yfinance 共識 (fair P/E 28)
+      target_year: 2027
+      pe_bands: { super_bargain: 15.12, cheap: 19.32, fair: 28, expensive: 32.2, euphoria: 36.68 }  # standard
+    note: "Azure 雲算力 + OpenAI 最大股東(L3+L4)。"
+
+  - ticker: "GOOGL"
+    market: US
+    name: Alphabet
+    theme: [雲端, Gemini, 金字塔L3, 金字塔L4]
+    valuation:
+      method: pe_band
+      forward_eps: 14.48        # yfinance 共識 (fair P/E 24)
+      target_year: 2027
+      pe_bands: { super_bargain: 12.96, cheap: 16.56, fair: 24, expensive: 27.6, euphoria: 31.44 }  # standard
+    note: "GCP 雲 + Gemini 基礎模型(L3+L4)。"
+
+  - ticker: "AMZN"
+    market: US
+    name: Amazon
+    theme: [雲端, AWS, 金字塔L3]
+    valuation:
+      method: pe_band
+      forward_eps: 9.86        # yfinance 共識 (fair P/E 30)
+      target_year: 2027
+      pe_bands: { super_bargain: 13.5, cheap: 20.4, fair: 30, expensive: 43.5, euphoria: 63 }  # wide
+    note: "AWS 雲算力龍頭(L3)。"
+
+  - ticker: "META"
+    market: US
+    name: Meta Platforms
+    theme: [基礎模型, Llama, 金字塔L4]
+    valuation:
+      method: pe_band
+      forward_eps: 36.25        # yfinance 共識 (fair P/E 24)
+      target_year: 2027
+      pe_bands: { super_bargain: 12.96, cheap: 16.56, fair: 24, expensive: 27.6, euphoria: 31.44 }  # standard
+    note: "Llama 開源模型 + 自建 AI 算力(L4)。"
+
+  - ticker: "PLTR"
+    market: US
+    name: Palantir
+    theme: [AI應用, 代理AI, 金字塔L5]
+    valuation:
+      method: pe_band
+      forward_eps: 2.08        # yfinance 共識 (fair P/E 55)
+      target_year: 2027
+      pe_bands: { super_bargain: 24.75, cheap: 37.4, fair: 55, expensive: 79.75, euphoria: 115.5 }  # wide
+    note: "代理式 AI 應用龍頭(L5)。極高本益比,注意瘋狂價。"
+
+  - ticker: "SPCX"
+    market: US
+    name: SpaceX
+    theme: [太空, 火箭, Starlink, 龍頭]
+    valuation:
+      method: ps_band
+      forward_revenue: 2.200e+10
+      shares: 1.311e+10
+      target_year: 2027
+      ps_bands: { super_bargain: 18, cheap: 27, fair: 40, expensive: 58, euphoria: 84 }  # wide
+    note: "⚠2026/6/12 IPO(估值1.77兆,史上最大)。營收/股數為估計(Starlink+發射~$22B、~131億股),請校正。現價隱含P/S極高=定價完美。"
+
+  - ticker: "OKLO"
+    market: US
+    name: Oklo (核能SMR)
+    theme: [能源, 核能SMR, 金字塔L1]
+    valuation:
+      method: price_band
+      lookback_years: 3
+    note: "小型模組化核電,Altman 投資。尚未量產營收→用股價分布。極投機。"
+
+  - ticker: "CRWV"
+    market: US
+    name: CoreWeave
+    theme: [雲端, GPU算力, 金字塔L3]
+    valuation:
+      method: price_band
+      lookback_years: 3
+    note: "GPU as a Service 純算力出租(L3)。2025 IPO,燒錢高成長→股價分布。"
+
+  - ticker: "NBIS"
+    market: US
+    name: Nebius
+    theme: [雲端, GPU算力, 金字塔L3]
+    valuation:
+      method: price_band
+      lookback_years: 3
+    note: "歐洲 GPU 雲(L3)。獲利不穩→股價分布。"
+
+  - ticker: "UFO"
+    market: US
+    name: Procure Space ETF
+    theme: [ETF, 太空, 純太空]
+    valuation:
+      method: price_band
+      lookback_years: 5
+    note: "純度較高的全球太空 ETF。"
+
+  - ticker: "XOVR"
+    market: US
+    name: ERShares (含SpaceX)
+    theme: [ETF, 太空, SpaceX曝險]
+    valuation:
+      method: price_band
+      lookback_years: 5
+    note: "少數可直接曝險 SpaceX 的 ETF。"
+
+  - ticker: "6285"
+    market: TW
+    name: 啟碁
+    theme: [太空, 衛星地面設備, 網通]
+    valuation:
+      method: price_band
+      lookback_years: 5
+    note: "衛星地面接收+網通設備。"
+
+  - ticker: "2313"
+    market: TW
+    name: 華通
+    theme: [太空, PCB, 星鏈板]
+    valuation:
+      method: price_band
+      lookback_years: 5
+    note: "星鏈衛星板主要 PCB 供應商。"
+
+  - ticker: "6271"
+    market: TW
+    name: 同欣電
+    theme: [太空, 衛星零組件]
+    valuation:
+      method: price_band
+      lookback_years: 5
+    note: "衛星零組件、影像感測封裝。"
+
+  - ticker: "2314"
+    market: TW
+    name: 台揚
+    theme: [太空, 衛星通訊]
+    valuation:
+      method: price_band
+      lookback_years: 5
+    note: "衛星通訊設備。獲利不穩→股價分布。"
+
+  - ticker: "3491"
+    market: TW
+    name: 昇達科
+    theme: [太空, 衛星通訊元件]
+    valuation:
+      method: price_band
+      lookback_years: 5
+    note: "衛星通訊元件佔比高。本益比極高→用股價分布。"
+
+  - ticker: "00910"
+    market: TW
+    name: 第一金太空衛星
+    theme: [ETF, 太空, 衛星]
+    valuation:
+      method: price_band
+      lookback_years: 4
+    note: "聚焦全球衛星設備與太空技術 ETF。"
+
+  - ticker: "00965"
+    market: TW
+    name: 元大航太防衛科技
+    theme: [ETF, 太空, 航太國防]
+    valuation:
+      method: price_band
+      lookback_years: 3
+    note: "涵蓋航太、國防與衛星 ETF。"
