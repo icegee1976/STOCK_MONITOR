@@ -507,11 +507,11 @@ stocks:
     theme: [太空, 火箭, Starlink, 龍頭]
     valuation:
       method: ps_band
-      forward_revenue: 2.200e+10
-      shares: 1.311e+10
+      forward_revenue: 2.500e+10   # 2026E ~$25B(2025實際$18.7B,Starlink佔61%;2024$14.1B,+33%)
+      shares: 1.311e+10            # ~131億股(估值1.77兆 ÷ IPO價$135)
       target_year: 2027
       ps_bands: { super_bargain: 18, cheap: 27, fair: 40, expensive: 58, euphoria: 84 }  # wide
-    note: "⚠2026/6/12 IPO(估值1.77兆,史上最大)。營收/股數為估計(Starlink+發射~$22B、~131億股),請校正。現價隱含P/S極高=定價完美。"
+    note: "2026/6/12 Nasdaq IPO(估值1.77兆=史上最大)。2025營收$18.7B(Starlink$11.4B/61%)。現價隱含P/S≈90x→定價完美,連fair P/S 40已很高。數字仍為估計,請隨季報校正。"
 
   - ticker: "OKLO"
     market: US

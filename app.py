@@ -127,6 +127,35 @@ def money(x, ccy):
     return f"{'NT$' if ccy=='TWD' else '$'}{x:,.2f}"
 
 
+# 黃仁勳 AI 生態五層(能源底座 → 應用頂層)+ 太空 + ETF。依 theme 標籤歸層。
+LAYER_ORDER = [
+    "⚡ L1 能源(底座)",
+    "🏗️ L2 基礎設施(晶片/記憶體/光通訊/電源散熱)",
+    "☁️ L3 雲端/資料中心",
+    "🧠 L4 基礎模型",
+    "🤖 L5 應用/代理(頂層)",
+    "🛰️ 太空",
+    "📦 ETF / 基金",
+]
+
+
+def ai_layer(cfg):
+    th = " ".join(str(x) for x in (cfg.get("theme") or []))
+    if "ETF" in th:
+        return "📦 ETF / 基金"
+    if any(k in th for k in ("太空", "火箭", "衛星", "登月", "航太", "Starlink")):
+        return "🛰️ 太空"
+    if "金字塔L1" in th or "能源" in th:
+        return "⚡ L1 能源(底座)"
+    if "金字塔L3" in th or "雲端" in th:
+        return "☁️ L3 雲端/資料中心"
+    if "金字塔L4" in th or "基礎模型" in th:
+        return "🧠 L4 基礎模型"
+    if "金字塔L5" in th or "AI應用" in th or "代理AI" in th:
+        return "🤖 L5 應用/代理(頂層)"
+    return "🏗️ L2 基礎設施(晶片/記憶體/光通訊/電源散熱)"
+
+
 # --------------------------------------------------------------------------- #
 #  圖表
 # --------------------------------------------------------------------------- #
@@ -210,8 +239,8 @@ with st.sidebar:
     st.divider()
     st.caption("價格帶:大特價→便宜→合理→昂貴→瘋狂。進入便宜價(含)以下 = 提醒買進。")
 
-tab_overview, tab_stock, tab_roi, tab_screen, tab_alloc = st.tabs(
-    ["📊 總覽", "🔍 個股河流圖", "💰 投報率試算", "🟢 便宜清單", "📐 資產配置試算"])
+tab_overview, tab_pyramid, tab_stock, tab_roi, tab_screen, tab_alloc = st.tabs(
+    ["📊 總覽", "🏛️ AI 金字塔", "🔍 個股河流圖", "💰 投報率試算", "🟢 便宜清單", "📐 資產配置試算"])
 
 # ---------- 總覽 ----------
 with tab_overview:
@@ -252,6 +281,39 @@ with tab_overview:
         st.success("★ 已進入便宜價:" + "、".join(it["name"] for it in buys))
     else:
         st.info("目前清單中沒有標的進入便宜價(在 2026 狂熱行情下屬正常 —— 耐心等回檔)。")
+
+# ---------- AI 金字塔分層 ----------
+with tab_pyramid:
+    st.caption("黃仁勳的 AI 生態五層:**能源(底座)→ 基礎設施 → 雲端/資料中心 → 基礎模型 → 應用/代理(頂層)**,"
+               "外加太空與 ETF。同一份清單,按產業階層重新分組。")
+    items = build_all(stocks, config, mf)
+    cfgmap = {str(s["ticker"]): s for s in stocks}
+    groups = {}
+    for it in items:
+        groups.setdefault(ai_layer(cfgmap.get(it["ticker"], {})), []).append(it)
+    import pandas as pd
+    for lay in LAYER_ORDER:
+        g = groups.get(lay)
+        if not g:
+            continue
+        cheap_n = sum(1 for it in g if it["analysis"] and it["analysis"]["is_buy"])
+        st.subheader(lay)
+        st.caption(f"{len(g)} 檔" + (f" ・ 🟢 {cheap_n} 檔已便宜" if cheap_n else ""))
+        rows = []
+        for it in g:
+            if it["error"]:
+                rows.append({"標的": it["name"], "代號": it["ticker"], "現價": "—",
+                             "價位": "錯誤", "距便宜": "—"})
+                continue
+            a, d = it["analysis"], it["data"]
+            rows.append({"標的": it["name"], "代號": it["ticker"],
+                         "現價": money(d["price"], d["currency"]), "價位": a["region"],
+                         "距便宜": "已便宜" if a["is_buy"] else f"需跌 {a['drop_to_cheap_pct']}%"})
+        st.dataframe(
+            pd.DataFrame(rows).style.map(
+                lambda v: f"color:white;background-color:{REGION_HEX.get(v, '#888')}"
+                if v in REGION_HEX else "", subset=["價位"]),
+            hide_index=True, width="stretch")
 
 # ---------- 個股 ----------
 with tab_stock:
