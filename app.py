@@ -21,7 +21,7 @@ sys.path.insert(0, HERE)
 
 from aimonitor import providers
 from aimonitor.valuation import compute_zones, ValuationError, ZONE_KEYS, ZONE_LABEL
-from aimonitor.classify import analyze
+from aimonitor.classify import analyze, REGION_ORDER
 from aimonitor.roi import scenario_roi
 
 try:
@@ -125,6 +125,23 @@ def money(x, ccy):
     if x is None:
         return "—"
     return f"{'NT$' if ccy=='TWD' else '$'}{x:,.2f}"
+
+
+# 價位欄排序修正:Streamlit 點欄位是按字串 Unicode 排,不合「便宜→昂貴」邏輯。
+# 在標籤前綴隱形序號 ①②③…⑥,讓點擊排序變成 大特價→超瘋狂 的正確順序。
+_CIRCLED = "①②③④⑤⑥"
+
+
+def region_sortable(region):
+    try:
+        return f"{_CIRCLED[REGION_ORDER.index(region)]}{region}"
+    except (ValueError, IndexError):
+        return region
+
+
+def region_color(v):
+    name = v[1:] if (v and v[0] in _CIRCLED) else v   # 去前綴序號再查色
+    return f"color:white;background-color:{REGION_HEX.get(name, '#888')}"
 
 
 # 黃仁勳 AI 生態五層(能源底座 → 應用頂層)+ 太空 + ETF。依 theme 標籤歸層。
@@ -257,7 +274,7 @@ with tab_overview:
         rows.append({
             "標的": it["name"], "代號": it["ticker"],
             "現價": money(d["price"], d["currency"]),
-            "價位": a["region"],
+            "價位": region_sortable(a["region"]),
             "需跌%": 0.0 if a["is_buy"] else a["drop_to_cheap_pct"],
             "1年觸及%": a.get("prob_hit_cheap", {}).get(yr1),
             "隱含倍數": z.get("implied_multiple"),
@@ -266,10 +283,8 @@ with tab_overview:
     import pandas as pd
     df = pd.DataFrame(rows).sort_values("需跌%", na_position="last")
 
-    def color_region(v):
-        return f"color: white; background-color: {REGION_HEX.get(v, '#888')}"
     st.dataframe(
-        df.style.map(color_region, subset=["價位"]),
+        df.style.map(region_color, subset=["價位"]),
         width="stretch", height=640,
         column_config={
             "需跌%": st.column_config.NumberColumn(format="%.1f%%"),
