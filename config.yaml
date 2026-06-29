@@ -43,7 +43,10 @@ alert:
 # --- 數據來源 ---
 providers:
   tw: finmind                 # 台股：FinMind (免金鑰可用，有 token 提高額度)
-  us: yfinance                # 美股：yfinance 主，失敗自動降級
+  us: yfinance                # 美股：預設 yfinance;若填 finnhub_api_key 則改用 Finnhub 取報價
   finmind_token: ""           # 選填,提高速率(300→600/hr)。⚠勿把真 token commit;
                               #   改設環境變數 FINMIND_TOKEN(或 Streamlit Cloud Secrets)更安全
+  finnhub_api_key: ""         # 選填,美股備援。雲端(機房IP)yfinance 常被限流→填這個改用 Finnhub
+                              #   即時報價(免費版有報價無歷史K線)。建議用環境變數 FINNHUB_API_KEY
+                              #   或 Streamlit Cloud Secrets,勿把真金鑰 commit。免費申請:finnhub.io
   cache_minutes: 15           # 報價快取分鐘數，避免重複打 API

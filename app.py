@@ -272,6 +272,14 @@ config, stocks = load_config(STAMP)
 if "custom" not in st.session_state:        # 自訂清單(開機自動讀回上次存檔)
     st.session_state.custom = load_custom()
 
+# Streamlit Cloud Secrets → 環境變數(providers 從 env 讀金鑰)。本機無 secrets 時略過。
+try:
+    for _k in ("FINNHUB_API_KEY", "FINMIND_TOKEN"):
+        if _k in st.secrets and st.secrets[_k]:
+            os.environ.setdefault(_k, str(st.secrets[_k]))
+except Exception:
+    pass
+
 st.title("📈 美股／台股 AI＋太空 成長股／ETF 監測器")
 st.caption("⚠ 資訊／教育用途,非投資建議;免費數據為日收盤價(EOD,非盤中即時)。")
 

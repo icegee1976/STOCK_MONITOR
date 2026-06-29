@@ -205,6 +205,74 @@ def fetch_tw(ticker: str, name: str, years: int, token: str = "") -> StockData:
 
 
 # --------------------------------------------------------------------------- #
+#  美股備援: Finnhub — 即時報價在雲端機房 IP 也拿得到(解決 yfinance 429)。
+#  免費版有 /quote(報價)與 /stock/metric(基本面),但無 /stock/candle(歷史→付費)。
+# --------------------------------------------------------------------------- #
+FINNHUB = "https://finnhub.io/api/v1"
+
+
+def _finnhub_us(ticker: str, key: str) -> dict:
+    out = {}
+    sym = urllib.parse.quote(ticker)
+    q = _http_get_json(f"{FINNHUB}/quote?symbol={sym}&token={key}")
+    price = _f(q.get("c"))
+    if not price:                      # c=0 → 無此美股或無資料
+        return out
+    out["price"] = price
+    ts = q.get("t")
+    out["date"] = (datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+                   if ts else datetime.now().strftime("%Y-%m-%d"))
+    try:                               # 基本面(trailing EPS / PE / 殖利率),best-effort
+        m = _http_get_json(f"{FINNHUB}/stock/metric?symbol={sym}&metric=all&token={key}").get("metric", {})
+        out["eps"] = _f(m.get("epsTTM") or m.get("epsBasicExclExtraItemsTTM"))
+        out["per"] = _f(m.get("peTTM") or m.get("peBasicExclExtraTTM"))
+        dy = _f(m.get("dividendYieldIndicatedAnnual") or m.get("currentDividendYieldTTM"))
+        out["div"] = (dy / 100.0) if dy is not None else None   # Finnhub 殖利率為百分數
+    except Exception:
+        pass
+    return out
+
+
+def fetch_us_finnhub(ticker: str, name: str, years: int, key: str) -> StockData:
+    """Finnhub 取即時報價/基本面;歷史(免費版無)盡力用 yfinance 補,雲端被限流就留空。
+    Finnhub 失敗(或非美股代號)→ 整個退回 yfinance。"""
+    d = StockData(ticker=ticker, market="US", name=name, currency="USD", source="Finnhub")
+    try:
+        fh = _finnhub_us(ticker, key)
+    except Exception:
+        fh = {}
+    if not fh.get("price"):
+        return fetch_us(ticker, name, years)        # 退回 yfinance
+    d.price, d.price_date = fh["price"], fh["date"]
+    d.trailing_eps, d.per, d.dividend_yield = fh.get("eps"), fh.get("per"), fh.get("div")
+    try:                                            # 盡力補歷史與年配息(雲端失敗就略過)
+        import yfinance as yf
+        t = yf.Ticker(ticker)
+        hist = t.history(period=f"{max(years,1)}y", auto_adjust=True)
+        if hist is not None and len(hist):
+            d.price_history = [(i.strftime("%Y-%m-%d"), float(c)) for i, c in zip(hist.index, hist["Close"])]
+        info = {}
+        try:
+            info = t.info or {}
+        except Exception:
+            info = {}
+        d.trailing_eps = d.trailing_eps if d.trailing_eps is not None else _f(info.get("trailingEps"))
+        d.annual_dividend = _f(info.get("trailingAnnualDividendRate"))
+        if not d.dividend_yield:
+            dy = _f(info.get("trailingAnnualDividendYield"))
+            if dy is not None:
+                d.dividend_yield = dy if dy < 1 else dy / 100.0
+    except Exception:
+        pass
+    if d.per is None and d.price and d.trailing_eps and d.trailing_eps > 0:
+        d.per = round(d.price / d.trailing_eps, 2)
+    if d.trailing_eps and d.trailing_eps > 0 and d.price_history:
+        d.per_history = [(dt, round(c / d.trailing_eps, 2)) for dt, c in d.price_history]
+        d.per_history_approx = True
+    return d
+
+
+# --------------------------------------------------------------------------- #
 #  美股: yfinance (主) — 失敗時給清楚降級訊息
 # --------------------------------------------------------------------------- #
 def fetch_us(ticker: str, name: str, years: int) -> StockData:
@@ -286,7 +354,12 @@ def fetch(stock_cfg: dict, providers_cfg: dict, history_years: int, use_cache: b
         # 這樣金鑰不必寫進 repo,雲端額度也能從 300→600 次/小時。
         token = os.environ.get("FINMIND_TOKEN") or providers_cfg.get("finmind_token", "")
         data = fetch_tw(ticker, name, history_years, token)
-    elif market in ("US", "INTL"):     # INTL = 全球型 UCITS ETF(倫敦 .L 等),亦走 yfinance
+    elif market == "US":
+        # 有 Finnhub 金鑰 → 用 Finnhub 取即時報價(雲端機房 IP 也行);否則 yfinance。
+        fh_key = os.environ.get("FINNHUB_API_KEY") or providers_cfg.get("finnhub_api_key", "")
+        data = (fetch_us_finnhub(ticker, name, history_years, fh_key)
+                if fh_key else fetch_us(ticker, name, history_years))
+    elif market == "INTL":             # 全球型 ETF(倫敦 .L):Finnhub 免費不支援 → 走 yfinance
         data = fetch_us(ticker, name, history_years)
     else:
         data = StockData(ticker=ticker, market=market, name=name, error=f"未知市場 {market}")

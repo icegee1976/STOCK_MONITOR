@@ -93,7 +93,9 @@ streamlit run app.py
 **⚠ 雲端數據限制（誠實提醒）**
 - 所有報價皆為**日收盤價（EOD）**,非盤中即時(見第 5 節盲點④)。
 - **台股（FinMind）**：雲端可正常運作。設 `FINMIND_TOKEN` Secret 可把額度從 300→600 次/小時。
-- **美股／全球 ETF（yfinance）**：雲端機房 IP 常被 Yahoo 限流（HTTP 429）。已內建**重試＋過期快取保命**(抓取失敗時顯示上次成功的收盤、標「過期快取」),但冷啟動或嚴重限流時美股仍可能間歇空白。要真的穩定就改接付費源（Finnhub／Alpha Vantage 免費金鑰），或**在本機跑**（家用 IP 不被限流）。
+- **美股（yfinance）**：雲端機房 IP 常被 Yahoo 限流（HTTP 429）。**解法:設 `FINNHUB_API_KEY` Secret** → 美股改用 **Finnhub 即時報價**(機房 IP 也拿得到,免費 60 次/分,[finnhub.io](https://finnhub.io) 免費申請)。已另內建重試＋過期快取保命。
+  - ⚠ Finnhub **免費版有報價、無歷史K線**(付費)。所以用 `price_band`(需歷史)的少數美股 ETF(CRWV／NBIS／OKLO／UFO／XOVR)在雲端會缺歷史;用明確價格帶的(NVDA／AVGO／MU…大多數)只需現價即可正確分類,不受影響。
+- **全球 ETF（INTL,倫敦 .L）**：仍走 yfinance(Finnhub 免費不支援 LSE),雲端較不穩;本機正常。
 
 ---
 
