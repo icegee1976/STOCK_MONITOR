@@ -156,7 +156,7 @@ def _back_adjust_tw(price_history, div_history):
     return adj_px, adj_div
 
 
-def fetch_tw(ticker: str, name: str, years: int, token: str = "") -> StockData:
+def fetch_tw(ticker: str, name: str, years: int, token: str = "", method: str = "") -> StockData:
     start = (datetime.now() - timedelta(days=int(years * 365.25) + 10)).strftime("%Y-%m-%d")
     d = StockData(ticker=ticker, market="TW", name=name, currency="TWD", source="FinMind")
     try:
@@ -166,32 +166,37 @@ def fetch_tw(ticker: str, name: str, years: int, token: str = "") -> StockData:
             d.price = d.price_history[-1][1]
             d.price_date = d.price_history[-1][0]
     except Exception as e:
-        d.error = f"FinMind 價格抓取失敗: {e}"
+        if "402" in str(e):     # FinMind 免費額度用罄(每小時上限)
+            d.error = "FinMind 免費額度用罄(402)。約 1 小時後自動重置;或到 finmindtrade.com 申請免費 token 設為 FINMIND_TOKEN 提高額度。"
+        else:
+            d.error = f"FinMind 價格抓取失敗: {e}"
         return d
-    try:
-        per = _finmind("TaiwanStockPER", ticker, start, token)
-        d.per_history = [(r["date"], float(r["PER"])) for r in per if r.get("PER") not in (None, 0)]
-        if per:
-            last = per[-1]
-            d.per = float(last["PER"]) if last.get("PER") else None
-            dy = last.get("dividend_yield")
-            d.dividend_yield = float(dy) / 100.0 if dy else None
-            if d.per and d.price:
-                d.trailing_eps = round(d.price / d.per, 4)  # EPS = 股價 / 本益比
-    except Exception:
-        pass  # PER 拿不到不致命,價格帶可改用 price_band
-    # 配息(ETF 殖利率法 / ROI 用)。ETF 無 PER,故 dividend_yield 改由此推。
-    try:
-        div = _finmind("TaiwanStockDividend", ticker, start, token)
-        hist = []
-        for r in div:
-            ex = r.get("CashExDividendTradingDate") or ""
-            cash = (r.get("CashEarningsDistribution") or 0) + (r.get("CashStatutorySurplus") or 0)
-            if ex and cash:
-                hist.append((ex, float(cash)))
-        d.div_history = sorted(hist)
-    except Exception:
-        pass
+    # 為省 FinMind 額度:PER 只給 pe_band(含 auto 河流圖)、配息只給 yield_band。
+    if method == "pe_band":
+        try:
+            per = _finmind("TaiwanStockPER", ticker, start, token)
+            d.per_history = [(r["date"], float(r["PER"])) for r in per if r.get("PER") not in (None, 0)]
+            if per:
+                last = per[-1]
+                d.per = float(last["PER"]) if last.get("PER") else None
+                dy = last.get("dividend_yield")
+                d.dividend_yield = float(dy) / 100.0 if dy else None
+                if d.per and d.price:
+                    d.trailing_eps = round(d.price / d.per, 4)  # EPS = 股價 / 本益比
+        except Exception:
+            pass  # PER 拿不到不致命
+    if method == "yield_band":
+        try:
+            div = _finmind("TaiwanStockDividend", ticker, start, token)
+            hist = []
+            for r in div:
+                ex = r.get("CashExDividendTradingDate") or ""
+                cash = (r.get("CashEarningsDistribution") or 0) + (r.get("CashStatutorySurplus") or 0)
+                if ex and cash:
+                    hist.append((ex, float(cash)))
+            d.div_history = sorted(hist)
+        except Exception:
+            pass
     # 還原分割(總是執行,即使無配息也要修正分割股的價格序列)
     d.price_history, d.div_history = _back_adjust_tw(d.price_history, d.div_history)
     if d.price_history:
@@ -353,7 +358,8 @@ def fetch(stock_cfg: dict, providers_cfg: dict, history_years: int, use_cache: b
         # token 優先讀環境變數/Streamlit Secret(FINMIND_TOKEN),其次 config。
         # 這樣金鑰不必寫進 repo,雲端額度也能從 300→600 次/小時。
         token = os.environ.get("FINMIND_TOKEN") or providers_cfg.get("finmind_token", "")
-        data = fetch_tw(ticker, name, history_years, token)
+        method = (stock_cfg.get("valuation") or {}).get("method", "")  # 決定要不要打 PER/配息
+        data = fetch_tw(ticker, name, history_years, token, method)
     elif market == "US":
         # 有 Finnhub 金鑰 → 用 Finnhub 取即時報價(雲端機房 IP 也行);否則 yfinance。
         fh_key = os.environ.get("FINNHUB_API_KEY") or providers_cfg.get("finnhub_api_key", "")
