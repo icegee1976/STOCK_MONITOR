@@ -143,14 +143,22 @@ def compute_zones(stock_cfg: dict, data, config: dict) -> dict:
                             f"forward_revenue 假設可能過低/過時,請校正")
 
     elif method == "price_band":
-        yrs = int(val.get("lookback_years", config.get("history_years", 5)))
-        if not data.price_history:
-            raise ValuationError("無股價歷史可做 price_band")
-        zones = _auto_bands_from_history(data.price_history, pctl)
-        result.update(zones=zones, target_year=None, anchor=None,
-                      anchor_kind="股價分布",
-                      assumptions=f"過去約{yrs}年股價分布百分位")
-        warnings.append("price_band 純看歷史股價分布,不含未來成長假設")
+        explicit = val.get("bands")
+        if explicit:                          # 固定價格帶快照:雲端只需現價即可分類,免歷史
+            zones = {k: round(float(explicit[k]), 2) for k in ZONE_KEYS}
+            result.update(zones=zones, target_year=None, anchor=None,
+                          anchor_kind="固定價格帶",
+                          assumptions="固定價格帶快照(免歷史,雲端可用;數字為某時點算出,請定期重算)")
+            warnings.append("固定價格帶為快照,不會隨新股價更新;建議定期用本機重算")
+        else:
+            yrs = int(val.get("lookback_years", config.get("history_years", 5)))
+            if not data.price_history:
+                raise ValuationError("無股價歷史可做 price_band(雲端可改填固定 bands)")
+            zones = _auto_bands_from_history(data.price_history, pctl)
+            result.update(zones=zones, target_year=None, anchor=None,
+                          anchor_kind="股價分布",
+                          assumptions=f"過去約{yrs}年股價分布百分位")
+            warnings.append("price_band 純看歷史股價分布,不含未來成長假設")
         # 市值型/大盤/全球指數長期上漲 → 多半落在歷史高百分位而顯示偏貴,
         # 但這不是擇時賣出訊號,此類核心 ETF 一般採定期定額(DCA)。
         theme = stock_cfg.get("theme", []) or []

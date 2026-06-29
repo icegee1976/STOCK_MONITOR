@@ -520,6 +520,7 @@ stocks:
     valuation:
       method: price_band
       lookback_years: 3
+      bands: { super_bargain: 9.68, cheap: 9.81, fair: 10.34, expensive: 30.91, euphoria: 72.65 }  # 固定帶(雲端用)
     note: "小型模組化核電,Altman 投資。尚未量產營收→用股價分布。極投機。"
 
   - ticker: "CRWV"
@@ -529,6 +530,7 @@ stocks:
     valuation:
       method: price_band
       lookback_years: 3
+      bands: { super_bargain: 63.65, cheap: 80.27, fair: 99.89, expensive: 120.76, euphoria: 139.88 }  # 固定帶(雲端用)
     note: "GPU as a Service 純算力出租(L3)。2025 IPO,燒錢高成長→股價分布。"
 
   - ticker: "NBIS"
@@ -538,6 +540,7 @@ stocks:
     valuation:
       method: price_band
       lookback_years: 3
+      bands: { super_bargain: 23.46, cheap: 32.53, fair: 69.5, expensive: 107.15, euphoria: 158.96 }  # 固定帶(雲端用)
     note: "歐洲 GPU 雲(L3)。獲利不穩→股價分布。"
 
   - ticker: "UFO"
@@ -547,6 +550,7 @@ stocks:
     valuation:
       method: price_band
       lookback_years: 5
+      bands: { super_bargain: 16.13, cheap: 18.01, fair: 21.01, expensive: 27.83, euphoria: 40.1 }  # 固定帶(雲端用)
     note: "純度較高的全球太空 ETF。"
 
   - ticker: "XOVR"
@@ -556,6 +560,7 @@ stocks:
     valuation:
       method: price_band
       lookback_years: 5
+      bands: { super_bargain: 10.02, cheap: 11.54, fair: 15.17, expensive: 17.64, euphoria: 19.66 }  # 固定帶(雲端用)
     note: "少數可直接曝險 SpaceX 的 ETF。"
 
   - ticker: "6285"

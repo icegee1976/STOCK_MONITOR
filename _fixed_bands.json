@@ -1,0 +1,37 @@
+{
+ "CRWV": {
+  "super_bargain": 63.65,
+  "cheap": 80.27,
+  "fair": 99.89,
+  "expensive": 120.76,
+  "euphoria": 139.88
+ },
+ "NBIS": {
+  "super_bargain": 23.46,
+  "cheap": 32.53,
+  "fair": 69.5,
+  "expensive": 107.15,
+  "euphoria": 158.96
+ },
+ "OKLO": {
+  "super_bargain": 9.68,
+  "cheap": 9.81,
+  "fair": 10.34,
+  "expensive": 30.91,
+  "euphoria": 72.65
+ },
+ "UFO": {
+  "super_bargain": 16.13,
+  "cheap": 18.01,
+  "fair": 21.01,
+  "expensive": 27.83,
+  "euphoria": 40.1
+ },
+ "XOVR": {
+  "super_bargain": 10.02,
+  "cheap": 11.54,
+  "fair": 15.17,
+  "expensive": 17.64,
+  "euphoria": 19.66
+ }
+}

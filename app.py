@@ -287,6 +287,10 @@ with st.sidebar:
     st.header("設定")
     market_filter = st.selectbox("市場", ["全部", "TW 台股", "US 美股", "INTL 全球ETF"], index=0)
     mf = None if market_filter == "全部" else market_filter.split()[0]
+    _fh_on = bool(os.environ.get("FINNHUB_API_KEY")
+                  or config.get("providers", {}).get("finnhub_api_key"))
+    st.caption("美股來源:" + ("🟢 **Finnhub** 即時報價(已設金鑰)"
+                            if _fh_on else "yfinance(雲端易限流;設 FINNHUB_API_KEY 改用 Finnhub)"))
     if st.button("🔄 重新抓取 (清快取)"):
         st.cache_data.clear()
         providers_cache = os.path.join(HERE, ".cache")
