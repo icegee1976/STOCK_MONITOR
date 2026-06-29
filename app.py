@@ -287,10 +287,19 @@ with st.sidebar:
     st.header("設定")
     market_filter = st.selectbox("市場", ["全部", "TW 台股", "US 美股", "INTL 全球ETF"], index=0)
     mf = None if market_filter == "全部" else market_filter.split()[0]
-    _fh_on = bool(os.environ.get("FINNHUB_API_KEY")
-                  or config.get("providers", {}).get("finnhub_api_key"))
-    st.caption("美股來源:" + ("🟢 **Finnhub** 即時報價(已設金鑰)"
-                            if _fh_on else "yfinance(雲端易限流;設 FINNHUB_API_KEY 改用 Finnhub)"))
+    with st.expander("🔑 用自己的 API 金鑰(選填)"):
+        st.caption("填了就用**你自己的**額度,不碰部署者的;只存在你這個瀏覽器 session,"
+                   "別人看不到。填完按下方「🔄 重新抓取」即生效。")
+        st.text_input("FinMind token(台股)", type="password", key="user_finmind",
+                      help="finmindtrade.com 免費申請,台股額度 300→600/hr")
+        st.text_input("Finnhub API key(美股)", type="password", key="user_finnhub",
+                      help="finnhub.io 免費申請,雲端美股穩定報價(60/分)")
+    _own_fh = bool((st.session_state.get("user_finnhub") or "").strip())
+    _fh_on = _own_fh or bool(os.environ.get("FINNHUB_API_KEY")
+                             or config.get("providers", {}).get("finnhub_api_key"))
+    st.caption("美股來源:" + (
+        ("🟢 **Finnhub**(你的金鑰)" if _own_fh else "🟢 **Finnhub** 即時報價") if _fh_on
+        else "yfinance(雲端易限流;可在上方填 Finnhub 金鑰)"))
     if st.button("🔄 重新抓取 (清快取)"):
         st.cache_data.clear()
         providers_cache = os.path.join(HERE, ".cache")
@@ -299,6 +308,16 @@ with st.sidebar:
         st.rerun()
     st.divider()
     st.caption("價格帶:大特價→便宜→合理→昂貴→瘋狂。進入便宜價(含)以下 = 提醒買進。")
+
+# 使用者自帶金鑰 → 併入「本 session 專屬」config(複本,不動到快取的共用 config)。
+# providers 採 config 優先於 env,故使用者金鑰會覆蓋部署者的;沒填則回退部署者 env 金鑰。
+config = {**config, "providers": {
+    **config.get("providers", {}),
+    "finmind_token": (st.session_state.get("user_finmind") or "").strip()
+    or config.get("providers", {}).get("finmind_token", ""),
+    "finnhub_api_key": (st.session_state.get("user_finnhub") or "").strip()
+    or config.get("providers", {}).get("finnhub_api_key", ""),
+}}
 
 tab_overview, tab_pyramid, tab_stock, tab_roi, tab_screen, tab_alloc, tab_custom = st.tabs(
     ["📊 總覽", "🏛️ AI 金字塔", "🔍 個股河流圖", "💰 投報率試算", "🟢 便宜清單",

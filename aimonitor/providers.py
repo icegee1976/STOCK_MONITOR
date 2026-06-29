@@ -355,14 +355,15 @@ def fetch(stock_cfg: dict, providers_cfg: dict, history_years: int, use_cache: b
             return cached
 
     if market == "TW":
-        # token 優先讀環境變數/Streamlit Secret(FINMIND_TOKEN),其次 config。
-        # 這樣金鑰不必寫進 repo,雲端額度也能從 300→600 次/小時。
-        token = os.environ.get("FINMIND_TOKEN") or providers_cfg.get("finmind_token", "")
+        # 金鑰優先序:config(含使用者自帶金鑰)> 環境變數/Secret(部署者)。
+        # 這樣使用者在側邊欄填的金鑰會覆蓋部署者的,沒填則用部署者 env 金鑰。
+        token = providers_cfg.get("finmind_token") or os.environ.get("FINMIND_TOKEN", "")
         method = (stock_cfg.get("valuation") or {}).get("method", "")  # 決定要不要打 PER/配息
         data = fetch_tw(ticker, name, history_years, token, method)
     elif market == "US":
         # 有 Finnhub 金鑰 → 用 Finnhub 取即時報價(雲端機房 IP 也行);否則 yfinance。
-        fh_key = os.environ.get("FINNHUB_API_KEY") or providers_cfg.get("finnhub_api_key", "")
+        # 金鑰優先序:config(含使用者自帶)> 環境變數/Secret(部署者)。
+        fh_key = providers_cfg.get("finnhub_api_key") or os.environ.get("FINNHUB_API_KEY", "")
         data = (fetch_us_finnhub(ticker, name, history_years, fh_key)
                 if fh_key else fetch_us(ticker, name, history_years))
     elif market == "INTL":             # 全球型 ETF(倫敦 .L):Finnhub 免費不支援 → 走 yfinance
