@@ -3,4 +3,7 @@ __pycache__/
 *.pyc
 .venv/
 
+# 自訂清單(個人資料,透過儀表板的下載/匯入分享,不入庫)
+custom_watchlist.yaml
+
 # 來源簡報(NotebookLM 依 YouTube 影片產生)— 依使用者確認納入

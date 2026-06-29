@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -144,6 +145,35 @@ def region_color(v):
     return f"color:white;background-color:{REGION_HEX.get(name, '#888')}"
 
 
+# ---- 自訂清單:使用者輸入任意代號,可存檔本機 / 下載分享 / 匯入別人的 ----
+CUSTOM_FILE = os.path.join(HERE, "custom_watchlist.yaml")
+
+
+def load_custom():
+    if not os.path.exists(CUSTOM_FILE):
+        return []
+    try:
+        with open(CUSTOM_FILE, "r", encoding="utf-8") as f:
+            d = yaml.safe_load(f) or {}
+        return d.get("stocks", []) if isinstance(d, dict) else (d or [])
+    except Exception:
+        return []
+
+
+def save_custom(entries):
+    with open(CUSTOM_FILE, "w", encoding="utf-8") as f:
+        yaml.safe_dump({"stocks": entries}, f, allow_unicode=True, sort_keys=False)
+
+
+def custom_yaml(entries):
+    return yaml.safe_dump({"stocks": entries}, allow_unicode=True, sort_keys=False)
+
+
+def pe_bands_from_fair(fair):
+    r = [0.54, 0.69, 1.0, 1.15, 1.31]      # PDF 台積電河流圖幾何
+    return {k: round(float(fair) * r[i], 2) for i, k in enumerate(ZONE_KEYS)}
+
+
 # 黃仁勳 AI 生態五層(能源底座 → 應用頂層)+ 太空 + ETF。依 theme 標籤歸層。
 LAYER_ORDER = [
     "⚡ L1 能源(底座)",
@@ -239,6 +269,8 @@ def roi_bar(r):
 st.set_page_config(page_title="成長股／ETF 監測器", layout="wide", page_icon="📈")
 STAMP = _mtimes()                       # 全域快取鍵:config/watchlist 改動即失效
 config, stocks = load_config(STAMP)
+if "custom" not in st.session_state:        # 自訂清單(開機自動讀回上次存檔)
+    st.session_state.custom = load_custom()
 
 st.title("📈 美股／台股 AI＋太空 成長股／ETF 監測器")
 st.caption("⚠ 資訊／教育用途,非投資建議;免費數據為日收盤價(EOD,非盤中即時)。")
@@ -256,8 +288,9 @@ with st.sidebar:
     st.divider()
     st.caption("價格帶:大特價→便宜→合理→昂貴→瘋狂。進入便宜價(含)以下 = 提醒買進。")
 
-tab_overview, tab_pyramid, tab_stock, tab_roi, tab_screen, tab_alloc = st.tabs(
-    ["📊 總覽", "🏛️ AI 金字塔", "🔍 個股河流圖", "💰 投報率試算", "🟢 便宜清單", "📐 資產配置試算"])
+tab_overview, tab_pyramid, tab_stock, tab_roi, tab_screen, tab_alloc, tab_custom = st.tabs(
+    ["📊 總覽", "🏛️ AI 金字塔", "🔍 個股河流圖", "💰 投報率試算", "🟢 便宜清單",
+     "📐 資產配置試算", "➕ 自訂清單"])
 
 # ---------- 總覽 ----------
 with tab_overview:
@@ -531,6 +564,133 @@ with tab_alloc:
             st.plotly_chart(fig, width="stretch")
         st.caption("配置金額＝總資金×正規化權重;估算股數＝配置金額(換匯後)÷現價之概估,未扣手續費。"
                    "加權殖利率為各檔現金殖利率按權重加權。跨幣別已用即時匯率換算。")
+
+# ---------- 自訂清單 ----------
+with tab_custom:
+    st.markdown("**輸入任意台股／美股／ETF 代號**即時查詢價格帶,可**存檔本機、下載分享、匯入別人的清單**。"
+                "估值預設 `price_band`(股價分布,免任何假設);會賺錢的股可改 `pe_band` 並填預估 EPS。")
+
+    def _analyze_custom(cfg):       # 用 cfg 指紋當快取鍵,避免與主清單同代號相撞
+        key = ("custom", json.dumps(cfg.get("valuation"), sort_keys=True, default=str))
+        return analyze_stock(str(cfg["ticker"]), cfg, config, key)
+
+    with st.container(border=True):
+        st.markdown("**➕ 加入標的**")
+        a1, a2, a3 = st.columns([2, 2, 3])
+        in_tk = a1.text_input("代號", key="cu_tk", placeholder="2412 / TSLA / QQQ / VWRA.L")
+        in_mkt = a2.selectbox("市場", ["TW 台股", "US 美股", "INTL 全球/美股ETF"], key="cu_mkt")
+        in_nm = a3.text_input("名稱(可留空)", key="cu_nm")
+        in_method = st.selectbox(
+            "估價法",
+            ["price_band — 股價分布(免設定,推薦)",
+             "pe_band — 本益比河流圖(需填預估 EPS)",
+             "yield_band — 殖利率河流圖(高股息 ETF,自動)"], key="cu_method")
+        eps_v, fair_v = None, None
+        if in_method.startswith("pe_band"):
+            e1, e2 = st.columns(2)
+            eps_v = e1.number_input("預估 forward EPS(每股盈餘)", value=0.0, step=0.1, key="cu_eps")
+            fair_v = e2.number_input("合理本益比 fair P/E", value=20.0, step=1.0, key="cu_fair")
+        if st.button("➕ 加入並查詢", key="cu_add"):
+            tk = in_tk.strip().upper()
+            if not tk:
+                st.warning("請先輸入代號。")
+            else:
+                mkt = in_mkt.split()[0]
+                meth = in_method.split()[0]
+                if meth == "pe_band":
+                    val = {"method": "pe_band", "forward_eps": (eps_v or None),
+                           "target_year": 2027, "pe_bands": pe_bands_from_fair(fair_v or 20)}
+                elif meth == "yield_band":
+                    val = {"method": "yield_band", "yield_bands": "auto"}
+                else:
+                    val = {"method": "price_band", "lookback_years": int(config.get("history_years", 5))}
+                cfg = {"ticker": tk, "market": mkt, "name": (in_nm.strip() or tk),
+                       "theme": ["自訂"], "valuation": val}
+                if any(str(s["ticker"]).upper() == tk and s["market"] == mkt for s in st.session_state.custom):
+                    st.warning(f"{tk} 已在自訂清單中。")
+                else:
+                    with st.spinner(f"查詢 {tk} …"):
+                        data = providers.fetch(cfg, config.get("providers", {}),
+                                               int(config.get("history_years", 5)), use_cache=False)
+                    if not data.ok():
+                        st.error(f"加入失敗:{data.error or '抓不到資料,請確認代號與市場是否正確'}")
+                    else:
+                        st.session_state.custom.append(cfg)
+                        st.success(f"已加入 {cfg['name']} ({tk})")
+                        st.rerun()
+
+    cust = st.session_state.custom
+    if not cust:
+        st.info("尚無自訂標的。用上方表單加入,或在下方匯入別人分享的清單。")
+    else:
+        import pandas as pd
+        items = [_analyze_custom(c) for c in cust]
+        rows = []
+        for it in items:
+            if it["error"]:
+                rows.append({"標的": it["name"], "代號": it["ticker"], "市場": it["market"],
+                             "現價": "—", "價位": "錯誤", "距便宜": it["error"][:24]})
+                continue
+            a, d = it["analysis"], it["data"]
+            rows.append({"標的": it["name"], "代號": it["ticker"], "市場": it["market"],
+                         "現價": money(d["price"], d["currency"]),
+                         "價位": region_sortable(a["region"]),
+                         "距便宜": "已便宜" if a["is_buy"] else f"需跌 {a['drop_to_cheap_pct']}%"})
+        st.dataframe(pd.DataFrame(rows).style.map(region_color, subset=["價位"]),
+                     hide_index=True, width="stretch")
+        labels = [f"{c.get('name', '')} ({c['ticker']})" for c in cust]
+        rm = st.multiselect("移除標的", labels, key="cu_rm")
+        if rm and st.button("🗑 移除選取", key="cu_rmbtn"):
+            st.session_state.custom = [c for c, l in zip(cust, labels) if l not in set(rm)]
+            st.rerun()
+        with st.expander("🔍 深入看某一檔(河流圖 + 投報率)"):
+            pick = st.selectbox("選擇", labels, key="cu_pick")
+            pc = next((c for c, l in zip(cust, labels) if l == pick), None)
+            if pc:
+                it = _analyze_custom(pc)
+                if it["error"]:
+                    st.error(it["error"])
+                else:
+                    river_chart(it)
+                    g1, g2 = st.columns(2)
+                    amt = g1.number_input("投入金額試算", min_value=1000.0, value=300000.0, step=10000.0, key="cu_amt")
+                    ccy = g2.selectbox("資金幣別", ["TWD", "USD"], key="cu_ccy")
+                    data = providers.fetch(pc, config.get("providers", {}), int(config.get("history_years", 5)))
+                    sccy = data.currency or ("TWD" if pc["market"] == "TW" else "USD")
+                    if ccy != sccy:
+                        config.setdefault("fx", {})["USDTWD"] = fx_usd_twd(config.get("fx", {}).get("USDTWD", 32.0))
+                    r = scenario_roi(pc, data, it["zones"], amt, config, capital_currency=ccy)
+                    if "error" not in r and HAS_PLOTLY:
+                        roi_bar(r)
+
+    st.divider()
+    s1, s2, s3 = st.columns(3)
+    if s1.button("💾 儲存到本機", key="cu_save", help="存到 custom_watchlist.yaml,下次開啟自動帶回"):
+        save_custom(st.session_state.custom)
+        s1.success("已儲存")
+    s2.download_button("📤 下載分享檔", data=custom_yaml(st.session_state.custom),
+                       file_name="my_watchlist.yaml", mime="text/yaml", key="cu_dl",
+                       help="把這個檔傳給別人,他在此匯入就能看到一樣的清單")
+    up = s3.file_uploader("📥 匯入分享檔 (.yaml)", type=["yaml", "yml"], key="cu_up")
+    if up is not None:
+        try:
+            d = yaml.safe_load(up.read().decode("utf-8")) or {}
+            imported = d.get("stocks", []) if isinstance(d, dict) else d
+            have = {(str(c["ticker"]).upper(), c["market"]) for c in st.session_state.custom}
+            n = 0
+            for c in imported:
+                if isinstance(c, dict) and c.get("ticker") and c.get("market") \
+                        and (str(c["ticker"]).upper(), c["market"]) not in have:
+                    st.session_state.custom.append(c)
+                    have.add((str(c["ticker"]).upper(), c["market"]))
+                    n += 1
+            if n:
+                st.success(f"已匯入 {n} 檔(自動略過重複)。記得按「💾 儲存到本機」保留。")
+                st.rerun()
+            else:
+                st.info("沒有新標的可匯入(可能都已存在)。")
+        except Exception as e:
+            st.error(f"匯入失敗:{e}")
 
 st.divider()
 st.caption("⚠ 本工具僅作資訊／教育用途,不構成投資建議。所有估值建立在 watchlist.yaml 可修改的假設上;免費數據為日收盤價(EOD,非盤中即時)。投資請自負風險。")
