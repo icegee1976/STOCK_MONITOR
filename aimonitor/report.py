@@ -163,7 +163,13 @@ def render_roi(r, config):
         _p(f"  [yellow]匯率:資金幣別 {r['cap_ccy']} ≠ 標的幣別 {r['stock_ccy']} "
            f"(USD/TWD≈{r['fx_usdtwd']}),含匯率風險[/yellow]")
     if r["dividend_yield_pct"]:
-        _p(f"  (已含股利率 {r['dividend_yield_pct']}%/年 之簡化累積)")
+        rate = r.get("us_div_withholding")
+        if rate is not None:
+            net_yield = round(r['dividend_yield_pct'] * (1 - rate), 2)
+            _p(f"  (已含股利率 {r['dividend_yield_pct']}%/年 之簡化累積;"
+               f"美股稅後 ≈{net_yield}%/年,報酬已按 {rate*100:.0f}% 股利預扣計算)")
+        else:
+            _p(f"  (已含股利率 {r['dividend_yield_pct']}%/年 之簡化累積)")
     _p(f"  [dim]情境:若未來股價回到各價格帶,持有 N 年的報酬。這是 if-then 模型,非保證。[/dim]")
     _p()
     horizons = [row["years"] for row in r["scenarios"][0]["rows"]]

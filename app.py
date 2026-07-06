@@ -463,9 +463,14 @@ with tab_roi:
                 if r["fx_note"]:
                     st.warning(f"跨幣別:資金 {r['cap_ccy']} ≠ 標的 {r['stock_ccy']}(USD/TWD≈{r['fx_usdtwd']:.2f}),含匯率風險")
                 cur = r["price"]
+                _div_note = ""
+                if r.get("us_div_withholding") is not None:
+                    _div_note = (f"美股股利已按 {r['us_div_withholding']*100:.0f}% 預扣稅計算"
+                                 f"(上方殖利率如有顯示為毛值)。")
                 st.info(f"📌 **目標價 ＞ 現價（{money(cur, r['stock_ccy'])}）才是獲利情境。** "
                         f"低於現價的情境(如便宜價)代表股價『跌回』該價、賣出會虧 → 負報酬。\n\n"
-                        f"情境=若未來股價走到各價格帶並賣出,持有 N 年的總報酬/年化(if-then 模型,非保證;含股利與費稅)。")
+                        f"情境=若未來股價走到各價格帶並賣出,持有 N 年的總報酬/年化(if-then 模型,非保證;含股利與費稅)。"
+                        + (f"\n\n{_div_note}" if _div_note else ""))
                 roi_rows = []
                 for sc in r["scenarios"]:
                     diff = (sc["target_price"] - cur) / cur * 100 if cur else 0
