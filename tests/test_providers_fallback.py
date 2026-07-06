@@ -384,6 +384,39 @@ class StaleCacheRescueTest(ProvidersFallbackTestCase):
         self.assertEqual(result.price, 250.0)
         self.assertIn("(過期快取)", result.source)
 
+    def test_use_cache_false_still_rescued_by_stale_cache_on_total_failure(self):
+        """鎖:工單 010 —— stale rescue 段刻意「不看」use_cache 旗標。use_cache
+        只控制「要不要讀新鮮快取」這件事(見 fetch() 開頭 `if use_cache:` 那段),
+        跟「全源失敗時要不要撈過期快取保命」是兩件正交的事:即使呼叫方帶
+        use_cache=False(明確要求繞過新鮮快取、強制重新抓),線上全部失敗時
+        仍然必須被過期快取救援(可用性優先)。
+        什麼突變會翻紅:如果有人把 stale rescue 段改成 `if use_cache and stale...`
+        之類的條件(也就是誤把 use_cache=False 詮釋成「連過期快取都不要」),
+        這裡的 result.ok() 會從 True 變 False、source 也不會再帶「(過期快取)」。
+        """
+        stale = StockData(
+            ticker="TSLA", market="US", name="Tesla", currency="USD",
+            price=250.0, price_date="2026-07-01", source="Finnhub",
+        )
+        self._write_stale_cache(stale, days_old=2.0)  # 2 天前,遠超 15min TTL
+
+        os.environ.pop("FINNHUB_API_KEY", None)
+        fake_yf = _fake_yf_module(raise_on_history=True)  # yfinance 也失敗
+
+        with patch.object(providers, "_http_get_json") as mock_http, \
+             patch.dict(sys.modules, {"yfinance": fake_yf}):
+            result = providers.fetch(
+                self._stock_cfg(ticker="TSLA", market="US"),
+                self._providers_cfg(finnhub_api_key=""),
+                history_years=1,
+                use_cache=False,  # 明確要求繞過新鮮快取,強制走線上抓取
+            )
+
+        self.assertEqual(mock_http.call_count, 0)  # 無金鑰,壓根沒打 Finnhub;yfinance 也是假的
+        self.assertTrue(result.ok())
+        self.assertEqual(result.price, 250.0)
+        self.assertIn("(過期快取)", result.source)
+
 
 # =========================================================================== #
 #  S6 — 全源失敗 + 無快取 → error 非空

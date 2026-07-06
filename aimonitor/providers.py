@@ -376,6 +376,9 @@ def fetch(stock_cfg: dict, providers_cfg: dict, history_years: int, use_cache: b
         return data
     # 線上抓取失敗(雲端常因 yfinance 被限流)→ 退回任何「過期」快取保命:
     # 顯示上次成功抓到的資料(標記為過期快取),好過整檔變「錯誤」消失。
+    # 註:此救援刻意「不看」上面的 use_cache 旗標——use_cache 只決定要不要讀
+    # 「新鮮」快取,線上全源失敗時的過期快取保命是可用性保底,一律生效。
+    # 未來若要做「強制刷新、失敗就直接報錯」的語意,請另開參數,不要在這裡動手腳。
     stale = _load_cache(market, ticker, None)   # None = 無視 TTL
     if stale is not None and stale.ok():
         if "快取" not in (stale.source or ""):
