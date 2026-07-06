@@ -66,6 +66,13 @@ def scenario_roi(stock_cfg, data, zones_info, capital: float, config: dict,
     # 股利用「每股實際年配息 × 年數」累加(非殖利率×買價,避免高價買進時脫鉤);
     # 累積型 INTL ETF 的價格已 total-return 還原(配息滾入價格),不另計避免雙重計入。
     per_share_div = 0.0 if market == "INTL" else (data.annual_dividend or 0.0)
+    # 美國對非居民外國人(NRA)股利課 30% 預扣稅是現實(IRS Chapter 3),
+    # 不扣會系統性高估美股含息 ROI(高息標的誤差最大);稅率預設寫死於 code,
+    # 允許經 config.fees.us.dividend_withholding 覆寫(不動 config.yaml 本身)。
+    us_div_withholding = None
+    if market == "US":
+        us_div_withholding = fees["us"].get("dividend_withholding", 0.30)
+        per_share_div *= (1 - us_div_withholding)
     target_year = zones_info.get("target_year")
 
     scenarios = []
@@ -92,4 +99,5 @@ def scenario_roi(stock_cfg, data, zones_info, capital: float, config: dict,
         "target_year": target_year, "fx_usdtwd": fx,
         "scenarios": scenarios,
         "fx_note": (stock_ccy != cap_ccy),
+        "us_div_withholding": us_div_withholding,
     }

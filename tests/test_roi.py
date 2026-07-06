@@ -5,11 +5,10 @@
 不讀 watchlist.yaml/config.yaml、不打任何網路 API — `scenario_roi` 的 `data`
 參數一律用 `types.SimpleNamespace` stub 出 price/currency/dividend_yield/annual_dividend。
 
-⚠ 已知文件/引擎不符(見 docs/tickets/002-roi-classify-unit-tests.md 開單註記):
-README §5.5 與 CLAUDE.md 紅線宣稱 ROI 內含「美股股利預扣 30%」,但
-`aimonitor/roi.py` 目前對 `per_share_div` 直接使用 yfinance 原始股利、無 0.7 因子。
-本檔**不測**美股股利金額是否正確預扣(修法屬人類財務判斷,另案處理),
-僅在「INTL 市場股利貢獻為 0(避免累積型 ETF 雙重計入)」上做斷言。
+工單 007 已補實作美股股利預扣 30%(見 docs/tickets/007-us-dividend-withholding.md):
+`aimonitor/roi.py` 對 market=="US" 的 `per_share_div` 乘上 (1 − rate)、
+rate 預設 0.30(`config["fees"]["us"].get("dividend_withholding", 0.30)`),
+並在結果 dict 新增 `us_div_withholding` 欄位。見下方 UsDividendWithholdingTest。
 
 fees fixture(寫死,對照工單 SPEC):
     tw.brokerage = 0.001425, tw.brokerage_discount = 1.0, tw.tax_sell = 0.003
@@ -142,7 +141,7 @@ class ScenarioRoiGuardTest(unittest.TestCase):
 class ScenarioRoiIntlDividendTest(unittest.TestCase):
     """market="INTL"(累積型 ETF)股利貢獻恆為 0,避免與 total-return 價格雙重計入。
 
-    ⚠ 不測美股(market="US")股利預扣是否為 0.7 因子——見檔頭已知文件/引擎不符說明。
+    (美股股利預扣 30% 已由工單 007 實作,見下方 UsDividendWithholdingTest。)
     """
 
     CONFIG = {"fees": FEES, "fx": {"USDTWD": 32.0}, "roi_horizons_years": [1, 3]}
@@ -167,6 +166,76 @@ class ScenarioRoiIntlDividendTest(unittest.TestCase):
         self.assertEqual(row_1y["total_return_pct"], 0.0)
         # 直接鎖未經 round 的絕對金額:若 INTL 分支誤計股利(divs=500),此值變 10500
         self.assertEqual(row_1y["value_in_stock_ccy"], 10_000.0)
+
+
+class UsDividendWithholdingTest(unittest.TestCase):
+    """工單 007:market=="US" 股利乘上 (1 − dividend_withholding),預設稅率 0.30。"""
+
+    ZONES_INFO = {
+        "zones": {"cheap": 90.0, "fair": 100.0, "expensive": 120.0, "euphoria": 150.0},
+        "target_year": 2029,
+    }
+
+    def test_us_default_withholding_030_applies_07_factor(self):
+        # 手算(price=100, capital=10000→shares=100, annual_dividend=5.0, zone="fair"
+        # tprice=100.0, yrs=1, commission=0):
+        #   proceeds = 100*100 - 0 = 10000.0
+        #   divs = shares * per_share_div * yrs = 100 * (5.0*0.7) * 1 = 350.0
+        #   total = 10000 + 350 = 10350.0 → value_in_stock_ccy == 10350.0
+        #   ret = (10350-10000)/10000 = 0.035 → total_return_pct == 3.5
+        config = {"fees": FEES, "fx": {"USDTWD": 32.0}, "roi_horizons_years": [1]}
+        stock_cfg = {"ticker": "TEST_US", "market": "US", "name": "測試美股"}
+        data = _stub_data(price=100.0, currency="USD", annual_dividend=5.0)
+        result = scenario_roi(stock_cfg, data, self.ZONES_INFO, capital=10_000.0,
+                               config=config, capital_currency="USD")
+        self.assertNotIn("error", result)
+        self.assertEqual(result["us_div_withholding"], 0.30)
+        fair_scn = next(s for s in result["scenarios"] if s["zone"] == "fair")
+        row_1y = next(r for r in fair_scn["rows"] if r["years"] == 1)
+        self.assertEqual(row_1y["value_in_stock_ccy"], 10_350.0)
+        self.assertEqual(row_1y["total_return_pct"], 3.5)
+
+    def test_us_custom_withholding_rate_zero_is_backward_compatible(self):
+        # 手算:dividend_withholding=0.0 → per_share_div 不打折 → divs = 100*5.0*1 = 500.0
+        #   total = 10000 + 500 = 10500.0
+        fees = {"tw": FEES["tw"], "us": {"commission": 0.0, "dividend_withholding": 0.0}}
+        config = {"fees": fees, "fx": {"USDTWD": 32.0}, "roi_horizons_years": [1]}
+        stock_cfg = {"ticker": "TEST_US", "market": "US", "name": "測試美股"}
+        data = _stub_data(price=100.0, currency="USD", annual_dividend=5.0)
+        result = scenario_roi(stock_cfg, data, self.ZONES_INFO, capital=10_000.0,
+                               config=config, capital_currency="USD")
+        self.assertNotIn("error", result)
+        self.assertEqual(result["us_div_withholding"], 0.0)
+        fair_scn = next(s for s in result["scenarios"] if s["zone"] == "fair")
+        row_1y = next(r for r in fair_scn["rows"] if r["years"] == 1)
+        self.assertEqual(row_1y["value_in_stock_ccy"], 10_500.0)
+
+    def test_tw_dividend_not_discounted_and_withholding_field_none(self):
+        # 對照組:同構台股 case 股利不打折(維持現狀)。
+        # 手算(price=100, capital=100000, market=TW, annual_dividend=5.0):
+        #   shares = int(100000/(100*(1+0.001425))) = int(998.5757..) = 998
+        #   spent = 998*100*1.001425 = 99942.215
+        #   zone="fair" tprice=100.0, yrs=1: proceeds = 998*100*(1-0.001425-0.003)
+        #     = 99800*0.995575 = 99358.385
+        #   divs = 998*5.0*1 = 4990.0(不打折,無 0.7 因子)
+        #   total = 99358.385 + 4990.0 = 104348.385 → round(total, 2) = 104348.38
+        config = {"fees": FEES, "fx": {"USDTWD": 32.0}, "roi_horizons_years": [1]}
+        stock_cfg = {"ticker": "TEST_TW", "market": "TW", "name": "測試台股"}
+        zones_info = {
+            "zones": {"cheap": 90.0, "fair": 100.0, "expensive": 120.0, "euphoria": 150.0},
+            "target_year": 2029,
+        }
+        data = _stub_data(price=100.0, currency="TWD", annual_dividend=5.0)
+        result = scenario_roi(stock_cfg, data, zones_info, capital=100_000.0,
+                               config=config, capital_currency="TWD")
+        self.assertNotIn("error", result)
+        self.assertIsNone(result["us_div_withholding"])
+        fair_scn = next(s for s in result["scenarios"] if s["zone"] == "fair")
+        row_1y = next(r for r in fair_scn["rows"] if r["years"] == 1)
+        # 104348.385 恰在 round 半值邊界(引擎實跑為 .38)。斷言用 delta=0.011
+        # 容忍 .38/.39 兩種落點,避免綁死浮點半值行為;若 TW 股利被誤打 0.7 折
+        # (差 1497 元)仍會翻紅。
+        self.assertAlmostEqual(row_1y["value_in_stock_ccy"], 104_348.385, delta=0.011)
 
 
 if __name__ == "__main__":
