@@ -170,16 +170,26 @@ streamlit run app.py
 ```
 STOCK_MONITOR/
 ├─ monitor.py            # CLI 入口（report/screen/roi/watch/bands）
+├─ app.py                # Streamlit 儀表板（與 CLI 共用 aimonitor 引擎）
+├─ run_dashboard.bat     # 雙擊啟動儀表板（Windows）
 ├─ config.yaml           # 全域設定：價格帶百分位、費用、匯率、提醒
 ├─ watchlist.yaml        # 監測清單 + 每檔估價假設（← 你的主要編輯處）
+├─ watchlist.pdf_seed.yaml   # PDF 原始種子版備份（校正前）
+├─ _gen_watchlist.py     # 重新校正 watchlist 的工具（搭配 _calibrations.json）
+├─ _add_pyramid.py       # AI 金字塔擴充工具
+├─ _calibrations.json / _calib_raw.json / _fixed_bands.json / _new_raw.json
+│                        # 校正產物（勿手改，用 _gen_watchlist.py 重生）
 ├─ requirements.txt
 ├─ aimonitor/
-│  ├─ providers.py       # 台股 FinMind / 美股 yfinance + 快取 + 匯率
+│  ├─ providers.py       # 台股 FinMind / 美股 Finnhub→yfinance + 快取 + 匯率
 │  ├─ valuation.py       # 價格帶引擎（forward-EPS × 本益比帶）
 │  ├─ classify.py        # 價位分類、缺口、觸及機率
-│  ├─ roi.py             # 情境投報率（含稅費/匯率/股利）
+│  ├─ roi.py             # 情境投報率（含稅費/匯率/股利，美股股利預扣 30%）
 │  ├─ screener.py        # 便宜標的篩選
 │  └─ report.py          # 終端報表（rich／純文字）
+├─ tests/                # 離線測試套件（71 題，0 API：黃金值/ROI/分類/拆股/降級鏈）
+│                        #   跑法：python -m unittest discover -s tests
+├─ docs/                 # api-budget.md（API 額度總帳）+ tickets/（工單紀錄）
 └─ AI_Investment_Blueprint.pdf   # 來源簡報
 ```
 

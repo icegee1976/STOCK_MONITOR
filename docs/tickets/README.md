@@ -9,4 +9,5 @@
 
 `000-baseline.md` 由 orchestrator 在第一輪盤點時產生(現況 + 待改進清單)。
 提醒(見 `.claude/CLAUDE.md` 紅線):顧 API 額度、數值正確第一、不改使用者假設、保留免責聲明。
-高價值早期工單建議:為估價引擎補**黃金值 regression 測試**,把目前唯一靠人工的數值 gate 自動化。
+黃金值 regression 已由工單 001 落地(`tests/test_golden_valuation.py`,離線 0 API);
+全套離線 gate:`python -m unittest discover -s tests`(001–005/007 共 71 題)。
