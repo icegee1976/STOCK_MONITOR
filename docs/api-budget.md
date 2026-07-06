@@ -25,7 +25,7 @@ US 27:pe_band 16/ps_band 6/price_band 固定帶 5;INTL 5:price_band)。
 | `report` / `screen` 全清單(57 檔) | **36** | 54 | ~64 | FinMind 12%/hr;**Finnhub 54 接近 60/min**(序列執行有自然間隔,實務約 30–60s 內發出,邊緣) |
 | Dashboard 冷載入(總覽全清單) | 36 | 54 | ~64 | 同上;之後 15 分鐘內 rerun 幾乎 0(見 §3) |
 | `roi <ticker> <amt>`(跨幣別) | 1–2 | 0–2 | 0–2 | +1 次匯率 |
-| **`watch --interval 300`(預設)** | **36/輪 × 12 輪/hr = 432/hr** | 54/輪 | ~64/輪 | 🚨 **超過免費 300/hr:約 8 輪(~40 分鐘)後 402** |
+| **`watch --interval 300`(預設,已修工單 008)** | **≤36/15min ≈ 144/hr**(use_cache=True,同快取週期內多輪共用資料) | 54/首輪,之後多輪共用 | ~64/首輪,之後多輪共用 | ✅ 已修;15 分鐘快取吸收輪詢,不再 402 |
 
 ## 3. 快取層(現狀確認)
 
@@ -41,12 +41,12 @@ US 27:pe_band 16/ps_band 6/price_band 固定帶 5;INTL 5:price_band)。
 
 ## 4. 發現(只記錄,修復需另開工單)
 
-- **F-1(高)`watch` 預設參數自我打爆額度**:`--interval 300`(預設值)× 36 FinMind/輪
-  = 432/hr > 300/hr 免費額度,**用預設值跑約 40 分鐘就會 402**,之後整個 IP 的 FinMind
-  當小時額度歸零(連 dashboard 也一起死)。有 token(600/hr)時 432 勉強過,但無餘裕。
-  → 修向候選:(a) 提高預設 interval;(b) watch 改 `use_cache=True` 讓 15 分快取吸收
-  (interval<900 時多輪共用同一批資料,額度立即除以 3);(c) 輪詢前檢查額度預算。
-  屬行為變更,**人類拍板**。
+- **F-1(高)`watch` 預設參數自我打爆額度 —— 已修(工單 008)**:原本
+  `--interval 300`(預設值)× 36 FinMind/輪 = 432/hr > 300/hr 免費額度,**用預設值跑
+  約 40 分鐘就會 402**,之後整個 IP 的 FinMind 當小時額度歸零(連 dashboard 也一起死)。
+  已改為 (b):`cmd_watch` 的 `make_fetch_fn(config, use_cache=True)`,讓 15 分鐘檔案
+  快取吸收輪詢(interval<900 時多輪共用同一批資料),額度上限降到 ≤144/hr,
+  `--interval 300` 預設值即安全。
 - **F-2(中)Finnhub 突發接近上限**:全清單 54 次(27 檔×2)理論上可在 1 分鐘內發出,
   貼著 60/min。序列 HTTP 延遲目前是唯一緩衝;若未來並行化抓取,會直接超限。
 - **F-3(低)`watch` 對 INTL/US 的 429 無輪間退避**:單次抓取內有 `_retry` 指數退避,
@@ -59,8 +59,8 @@ US 27:pe_band 16/ps_band 6/price_band 固定帶 5;INTL 5:price_band)。
 
 | 條件 | FinMind 預算 | 最大輪/hr | 最小 interval | 建議值 |
 |---|---|---|---|---|
-| 免 token(300/hr),現狀 use_cache=False | 36/輪 | 8.3 | ≥434s | **≥600s**(留 28% 給同時段其他使用) |
-| 有 token(600/hr),現狀 | 36/輪 | 16.6 | ≥217s | ≥450s(留餘裕) |
-| 若改 use_cache=True(F-1 修向 b) | ≤36/15min≈144/hr | — | 任意 | 300s 即安全 |
+| 免 token(300/hr),舊行為 use_cache=False(已修) | 36/輪 | 8.3 | ≥434s | ~~≥600s~~(已不適用) |
+| 有 token(600/hr),舊行為(已修) | 36/輪 | 16.6 | ≥217s | ~~≥450s~~(已不適用) |
+| **use_cache=True(已修,工單 008,現行行為)** | ≤36/15min≈144/hr | — | 任意 | 300s(預設值)即安全 |
 
 > 本審計 0 次 API 呼叫(純讀 code + 本地 watchlist 統計)。

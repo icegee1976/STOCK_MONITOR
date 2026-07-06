@@ -157,7 +157,7 @@ def _notify(title, msg):
 
 
 def cmd_watch(args, config, stocks):
-    fetch_fn = make_fetch_fn(config, use_cache=False)
+    fetch_fn = make_fetch_fn(config, use_cache=True)
     notify_zone = config.get("alert", {}).get("notify_zone", "cheap")
     do_desktop = config.get("alert", {}).get("desktop_notification", True)
     horizons = config.get("roi_horizons_years", [1, 3, 5])
@@ -166,6 +166,7 @@ def cmd_watch(args, config, stocks):
     interval = args.interval
 
     report._p(f"[bold]啟動監測[/bold] — 每 {interval}s 輪詢,進入「{notify_zone}」(含)以下即提醒。Ctrl+C 結束。")
+    report._p("[dim]報價快取 15 分鐘(EOD 資料,不影響判斷),同一快取週期內多輪共用資料以節省 API 額度。[/dim]")
     while True:
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
         triggered = []
