@@ -1,6 +1,6 @@
 # 002 — ROI 稅費與分類/機率 純函數單元測試(離線)
 
-狀態:OPEN(等 001 close 後派工)
+狀態:**CLOSED**(2026-07-06,commit 見下方收斂紀錄)
 母單:000-baseline.md 工單 002
 
 ## ⚠ 開單時的新發現(orchestrator,2026-07-06)
@@ -58,4 +58,86 @@ README §5.5 與 `.claude/CLAUDE.md` 紅線宣稱 ROI「內含美股股利預扣
 
 ## PLAN(executor 填)
 
+1. Read 本工單 SPEC + `aimonitor/roi.py`(96 行)、`aimonitor/classify.py`(109 行)全文,
+   確認 `_buy_cost`/`_sell_proceeds`/`scenario_roi`/`classify_region`/`prob_hit_barrier`/
+   `annualized_vol`/`analyze` 的簽名與現狀語意。
+2. 逐題用 `python -c` 手算並跑一次真實函式邏輯(不落地檔案),核對每個 SPEC oracle
+   數字,發現 `_buy_cost` TW 案例 SPEC 原文 99,942.2215 與實際手算/引擎值
+   99942.215 有出入(見 REPORT 疑點)。
+3. 新增 `tests/test_roi.py`(11 案例:_buy_cost×3、_sell_proceeds×2、scenario_roi
+   跨幣別×2、防護×3、INTL 股利×1)與 `tests/test_classify.py`(15 案例:
+   classify_region 六區×6、prob_hit_barrier×5、annualized_vol×2、analyze×2)。
+   `data` 全部用 `types.SimpleNamespace` stub,不讀 yaml、不 import providers。
+4. 跑 `python -m unittest discover -s tests -v`(全 38 題,含 001 的 12 題)確認全綠;
+   `python -m py_compile` 兩新檔 + 兩顆引擎檔確認語法零錯誤(引擎檔僅語法檢查,
+   未修改任何一行)。
+5. 跑 `python monitor.py report --ticker 2330` 對照黃金值(便宜 2228.57 / 大特 1731.23)
+   確認未受影響(本單完全沒碰 aimonitor/,理論上不會變動,仍實測驗證)。
+
 ## REPORT(executor 填)
+
+### 改動檔案(白名單內,零 aimonitor/ 改動)
+- 新增 `tests/test_roi.py`(11 個測試案例)
+- 新增 `tests/test_classify.py`(15 個測試案例)
+- `git diff --stat` 對已追蹤檔案為空(兩檔皆為新增的 untracked 檔案,未修改任何既有檔)
+
+### 測試輸出
+`python -m unittest discover -s tests -v`:
+```
+Ran 38 tests in 0.002s
+OK
+```
+拆分:`tests/test_roi.py` 11 個全綠、`tests/test_classify.py` 15 個全綠、
+`tests/test_golden_valuation.py`(001 交付,未改動)12 個全綠。
+
+`python -m py_compile tests/test_roi.py tests/test_classify.py aimonitor/roi.py aimonitor/classify.py`
+→ 零錯誤(後兩者僅語法檢查,未修改內容)。
+
+### 關鍵 oracle 實測值
+- `_buy_cost` TW:price=100, capital=100000 → shares=998, spent=99942.215
+  (int(100000/100.1425)=998;998×100×1.001425=99942.215)
+- `_sell_proceeds` TW:998股@120 → 119760×(1−0.001425−0.003)=119230.062
+- `prob_hit_barrier(100, 80, 0.3, 1)` = 0.4569903175523975
+  (x=ln1.25=0.223144, z=−0.743812, P=2Φ(z);查表容差 ±0.002 內符合 SPEC 的 ≈0.4569)
+- `annualized_vol` 31 筆常數收盤價 → 30 個對數報酬皆為 0 → pstdev=0 → vol=0.0
+- `scenario_roi` 跨幣別:TWD 320,000 / fx=32 / US price=100 → capital_in_stock=10000,
+  shares=100.0, spent=10000.0, fx_note=True(與同幣別對照組 fx_note=False)
+- `monitor.py report --ticker 2330`:便宜價 NT$2,228.57 / 大特價 NT$1,731.23
+  (與 test_golden_valuation.py 及 001 黃金值一致,PDF≈2,226/≈1,729 差異屬既有校正舍入,非本單引入)
+
+### 疑點(僅記錄,未修)
+1. **工單 SPEC 第 27 行筆誤**:`_buy_cost` 台股案例 SPEC 原文寫
+   `spent=998×100×1.001425=99,942.2215`,但實際手算與引擎現狀跑出的值為
+   `99942.215`(998×100=99800;99800×0.001425=142.215;99800+142.215=99942.215)。
+   SPEC 多寫了一位小數。已在 `test_roi.py::test_tw_whole_share_truncation`
+   註解中記錄此落差,測試斷言採**實際手算+引擎現狀值**(99942.215),
+   非逐字照抄 SPEC 文字。此為 SPEC 筆誤,非 `aimonitor/roi.py` 的 bug
+   (逐行核對 `_buy_cost` 程式碼與獨立 `python -c` 手算完全吻合)。
+2. 沿用 SPEC 已知記錄的美股股利預扣 30% 文件/引擎不符問題(見工單頭部),
+   本次測試刻意迴避,未新增額外發現。
+3. 未發現其他 `aimonitor/roi.py` / `aimonitor/classify.py` 邏輯疑點。
+
+### API 呼叫評估
+0 次(全離線,`data` 皆用 `types.SimpleNamespace` stub;`monitor.py report`
+驗證步驟屬人工冒煙非測試套件的一部分,套件本身不觸網)。
+
+### 剩餘風險
+- 未 commit(依指示)。
+- `tests/test_roi.py` 的 INTL 股利測試僅驗證「貢獻為 0」的分支邏輯,
+  未涵蓋 INTL market 在 `_buy_cost`/`_sell_proceeds` 的稅費路徑(現狀走 US 分支,
+  SPEC 未要求,故未測)。
+
+## 收斂紀錄(orchestrator)
+
+- Reviewer findings 仲裁(無 P1):
+  - **P2-3 採納**:252 年化因子原本零保護(常數序列 0×任何因子=0 無鑑別力)。
+    orchestrator 補 `test_alternating_series_locks_sqrt252_annualization_factor`:
+    31 筆 100/110 交替 → pstdev=ln(1.1),vol=ln(1.1)×sqrt(252)≈1.5130022(手算 oracle)。
+  - **P3-1 採納**:刪除 test_known_case 中拿實作驗實作的 assertEqual(erf 重算)四行
+    (且引擎有 clamp、測試式沒有,日後改參數會偽陽);保留查表 oracle(0.4569,±0.002)。
+  - **P2-4 採納**:INTL 股利測試補斷言未 round 的 value_in_stock_ccy==10000.0。
+  - **P2-1、P2-2 不改**:commission 加法已由 with_commission 案例鎖住;shares-guard
+    突變情境測試仍會以 exception 形式翻紅,鑑別力可接受。
+  - SPEC 筆誤(99,942.2215→99942.215)確認為 orchestrator 手誤,executor 處理正確。
+- 收斂 gate:39/39 綠(含 001 的 12 題)、py_compile 綠、diff 僅白名單、
+  orchestrator 已逐行讀 diff、黃金值未受影響(本單零 aimonitor/ 變動)。→ CLOSE。
