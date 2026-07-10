@@ -406,7 +406,10 @@ with tab_pyramid:
             hide_index=True, width="stretch")
 
 # ---------- 個股 ----------
-with tab_stock:
+# 012:抽成 fragment——selectbox 互動只重跑本分頁,不觸發全 script rerun,
+# tabs 前端狀態(作用中分頁)不會被總覽的元素樹重建覆蓋掉,避免切標的跳回總覽。
+@st.fragment
+def _stock_tab_body():
     names = {f"{s.get('name','')} ({s['ticker']})": str(s["ticker"]) for s in stocks
              if (not mf or s["market"] == mf)}
     pick = st.selectbox("選擇標的", list(names.keys()))
@@ -443,8 +446,14 @@ with tab_stock:
             if s_cfg.get("note"):
                 st.caption(s_cfg["note"])
 
+with tab_stock:
+    _stock_tab_body()
+
 # ---------- 投報率 ----------
-with tab_roi:
+# 012:同上,ROI 分頁互動最重(selectbox 切標的+金額/幣別 widget),原本每次
+# 互動都全 script rerun 導致 tabs 跳回總覽;fragment 化後只重跑本分頁。
+@st.fragment
+def _roi_tab_body():
     names2 = {f"{s.get('name','')} ({s['ticker']})": str(s["ticker"]) for s in stocks}
     colp, cola, colc = st.columns([2, 1, 1])
     pick2 = colp.selectbox("標的", list(names2.keys()), key="roi_pick")
@@ -460,6 +469,8 @@ with tab_roi:
                                    int(config.get("history_years", 5)), use_cache=True)
             stock_ccy = data.currency or ("TWD" if s_cfg["market"] == "TW" else "USD")
             if cap_ccy != stock_ccy:
+                # 012 註:config 是模組層共享 dict,此處在 fragment 內變異(setdefault)。
+                # fragment-only rerun 沿用上次全 rerun 的 config 物件,行為與搬移前一致,可接受。
                 config.setdefault("fx", {})["USDTWD"] = fx_usd_twd(
                     config.get("fx", {}).get("USDTWD", 32.0))
             r = scenario_roi(s_cfg, data, it["zones"], amount, config, capital_currency=cap_ccy)
@@ -506,6 +517,9 @@ with tab_roi:
                 st.dataframe(dfr.style.map(_retcolor, subset=_cols),
                              hide_index=True, width="stretch")
                 roi_bar(r)
+
+with tab_roi:
+    _roi_tab_body()
 
 # ---------- 便宜清單 ----------
 with tab_screen:
