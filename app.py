@@ -128,6 +128,17 @@ def money(x, ccy):
     return f"{'NT$' if ccy=='TWD' else '$'}{x:,.2f}"
 
 
+def md_money(x, ccy):
+    """money() 的 markdown 安全版:把 `$` 跳脫為 `\\$`。
+
+    Streamlit 的 st.markdown/st.info/... 會用 KaTeX 解析文字,若同一段字串內
+    出現兩個以上未跳脫的 `$`(例如「投入 NT$xxx → 買進 … @ NT$xxx」兩個金額),
+    會被誤判成行內數學公式,導致金額亂排、`**` 粗體失效。只在會同時嵌入
+    ≥2 個 money() 結果的 markdown 呼叫點使用;單一 `$` 不會觸發 KaTeX,無需改用。
+    """
+    return money(x, ccy).replace("$", "\\$")
+
+
 # 價位欄排序修正:Streamlit 點欄位是按字串 Unicode 排,不合「便宜→昂貴」邏輯。
 # 在標籤前綴隱形序號 ①②③…⑥,讓點擊排序變成 大特價→超瘋狂 的正確順序。
 _CIRCLED = "①②③④⑤⑥"
@@ -459,7 +470,7 @@ with tab_roi:
                     _n = int(r["shares"]); sh = f"{_n:,} 股({_n // 1000} 張+{_n % 1000} 股)"
                 else:
                     sh = f"{r['shares']:,.3f} 股"
-                st.markdown(f"投入 **{money(r['spent'], r['stock_ccy'])}** → 買進 **{sh}** @ {money(r['price'], r['stock_ccy'])}")
+                st.markdown(f"投入 **{md_money(r['spent'], r['stock_ccy'])}** → 買進 **{sh}** @ {md_money(r['price'], r['stock_ccy'])}")
                 if r["fx_note"]:
                     st.warning(f"跨幣別:資金 {r['cap_ccy']} ≠ 標的 {r['stock_ccy']}(USD/TWD≈{r['fx_usdtwd']:.2f}),含匯率風險")
                 cur = r["price"]
