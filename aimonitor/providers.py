@@ -399,6 +399,314 @@ def _sync_and_assemble(dataset: str, cache_dir: str, ticker: str, requested_star
     return _merge_rows_by_key(stored, raw_rows), incremental_empty
 
 
+# --------------------------------------------------------------------------- #
+#  台股第二資料源備援: TWSE(上市)/ TPEx(上櫃)官方 OpenAPI(工單 017)
+#
+#  只在 fetch_tw 的 FinMind 例外分支(價格抓取失敗,見下方)被呼叫——FinMind
+#  成功路徑完全不觸碰這裡,呼叫數見 docs/api-budget.md。兩者皆免金鑰、一次呼叫
+#  回「全市場當日收盤行情」,用來覆蓋 watchlist 內所有台股標的,不對個股逐檔
+#  查詢(省呼叫數)。全市場回應在 process 記憶體內 memoize(重用工單 013
+#  `_tw_cache_fresh` 的 EOD 邊界規則判斷這份 memo 還新不新鮮,不發明新規則),
+#  同一輪(screen/watch 跑多檔)最多各打一次;抓取失敗時保留舊 memo(可能是
+#  None)原樣回傳,不因一次暫時性失敗清空稍早才抓到的資料。不落地寫新檔案
+#  ——memo 純粹是模組層 dict,blob/history_store 兩層沿用既有設計。
+#
+#  實測欄位(2026-08-19,見工單 017 REPORT,mock 以此為準):
+#    TWSE STOCK_DAY_ALL → list[dict](非包一層 status/data,直接是陣列),鍵
+#      Date(民國年 "1150818" 無分隔)/Code/Name/ClosingPrice(乾淨數字字串,
+#      無千分位逗號,實測 1378 檔無一例外)/OpeningPrice/HighestPrice/
+#      LowestPrice/TradeVolume/TradeValue/Change/Transaction。
+#    TPEx tpex_mainboard_daily_close_quotes → list[dict](同樣直接是陣列,
+#      10000+ 列,含個股/ETF/債券),鍵 Date(格式同上)/SecuritiesCompanyCode/
+#      CompanyName/Close(同樣無逗號;當日無成交會是 " ---" 這種帶前導空白的
+#      佔位字串,需防呆跳過)/Open/High/Low/Average/TradingShares/...。
+#    兩端點數值字串仍統一經 `_tw_official_num` 防呆(去逗號/空白,"---" 等
+#    佔位符 → None)——實測雖無逗號案例,但官方資料源在不同資料集/未來格式
+#    調整下仍可能出現千分位逗號,保留這層防呆並在測試涵蓋(工單 017 SPEC
+#    明文要求的案例)。
+# --------------------------------------------------------------------------- #
+TWSE_STOCK_DAY_ALL = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
+TPEX_MAINBOARD_DAILY_CLOSE_QUOTES = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
+
+_TWSE_SNAPSHOT_MEMO: dict = {"data": None, "fetched_at": None, "failed_at": None}
+_TPEX_SNAPSHOT_MEMO: dict = {"data": None, "fetched_at": None, "failed_at": None}
+
+# 全故障時的「負向 memo」冷卻窗口(工單 017 reviewer 修正包 G3b)。沿用 013 的
+# floor 概念(短時間內不重打)——不是真的判斷 EOD 邊界,單純冷卻,見 `_market_snapshot`。
+_FALLBACK_NEGATIVE_MEMO_MINUTES = 15.0
+
+
+def _reset_snapshot_memos() -> None:
+    """測試輔助(工單 017 reviewer 修正包 G7):把 `_TWSE_SNAPSHOT_MEMO`/
+    `_TPEX_SNAPSHOT_MEMO` 兩個 process 記憶體 memo(含 `failed_at`)重置回初始
+    狀態。供測試在 setUp/tearDown 呼叫,避免同一 process 內的測試互相汙染。
+    **注意**:任何測試檔只要會驅動 `fetch_tw` 的 FinMind 失敗分支(進而觸發這裡
+    的模組層 memo,即使目標端點本身也被 mock 成失敗),就有可能寫入這兩個
+    module-level dict;若該測試檔沒有呼叫這個函數重置,理論上會被其他測試檔
+    (例如本檔 `tests/test_twse_fallback.py`)的殘留狀態影響,或反過來汙染其他
+    測試檔。目前只有本檔會斷言 memo 相關行為,其餘既有測試檔對此免疫(不檢查
+    memo 狀態),但未來新增這類測試檔時請務必自行呼叫這個函數重置。"""
+    for memo in (_TWSE_SNAPSHOT_MEMO, _TPEX_SNAPSHOT_MEMO):
+        memo["data"] = None
+        memo["fetched_at"] = None
+        memo["failed_at"] = None
+
+
+def _tw_official_num(s) -> float | None:
+    """TWSE/TPEx 官方數值字串 → float。去除千分位逗號與前後空白;無成交的佔位
+    字串(如 "---"、" ---"、"")或非正值一律 None(呼叫端跳過該列,不誤當
+    0 元現價)。工單 017 reviewer 修正包 G8:額外擋 inf/-inf/nan(`float("inf")`/
+    `float("nan")` 這種字串本身可以被 `float()` 成功解析,不會走進 ValueError
+    分支,但拿來當股價會讓下游比較/運算出現無法預期的結果,必須明確排除)。"""
+    if s is None:
+        return None
+    s = str(s).strip().replace(",", "")
+    if not s or s.strip("-") == "":
+        return None
+    try:
+        v = float(s)
+    except ValueError:
+        return None
+    if not math.isfinite(v):
+        return None
+    return v if v > 0 else None
+
+
+def _roc_date_to_iso(s) -> str | None:
+    """民國年日期字串(實測 "1150818" 無分隔格式;寬鬆相容 "115/08/18" 等含
+    分隔符變體,解析時先濾掉非數字字元)→ 西元 "YYYY-MM-DD"。格式無法辨識
+    (非 6~7 位數字,或組出不合法日期)一律 None,呼叫端跳過該列。
+
+    工單 017 reviewer 修正包 G8:
+    * 只接受 **ASCII** 數字字元(`"0"`~`"9"`,用字面集合比對,不用
+      `str.isdigit()`)——`str.isdigit()` 對全形數字(如 `"１１５"`)、其他
+      Unicode 數字字元也會回傳 True,`int()` 恰好也吃得下這些字元,兩者疊加
+      會讓全形輸入被「意外正確」解析,而非明確拒絕;改成只接受 ASCII 後,
+      全形輸入會被濾成空字串或錯誤長度而回傳 None,行為更可預期。
+    * 已知取捨(不修正,僅記錄):本函式用「先濾掉所有非數字字元、剩下的
+      digits 依固定寬度(6 或 7)切 day/month/roc_year」的策略解析——這對
+      「月/日未補零」的分隔符變體(例如 `"115/8/18"`,濾掉分隔符後剩
+      `"115818"` 只有 6 碼)**不支援**,會被誤判成 6 碼格式(2 位民國年)
+      而算出離譜的西元年份;不過後面的 `datetime(year, month, day)` 驗證
+      多半會因為 month/day 超出合法範圍而擋下、回傳 None(安全失敗,不會
+      靜默給出錯誤但看似合理的日期)。真正實測到的兩種格式(`"1150818"`
+      無分隔、`"115/08/18"` 有補零分隔)都不受此限制影響。
+    """
+    if not s:
+        return None
+    digits = "".join(ch for ch in str(s) if ch in "0123456789")
+    if len(digits) not in (6, 7):
+        return None
+    day, month, roc_year = digits[-2:], digits[-4:-2], digits[:-4]
+    try:
+        year = int(roc_year) + 1911
+        datetime(year, int(month), int(day))   # 驗證是合法日期,否則視為格式不明
+    except ValueError:
+        return None
+    return f"{year:04d}-{month}-{day}"
+
+
+def _parse_twse_snapshot(raw) -> dict:
+    """TWSE STOCK_DAY_ALL 原始回應(list[dict])→ {ticker: (price, iso_date)}。
+    單列解析失敗(缺鍵/格式異常)不拖垮整批,直接跳過該列。"""
+    out = {}
+    if not isinstance(raw, list):
+        return out
+    for row in raw:
+        try:
+            code = row.get("Code")
+            price = _tw_official_num(row.get("ClosingPrice"))
+            date = _roc_date_to_iso(row.get("Date"))
+            if code and price and date:
+                out[str(code)] = (price, date)
+        except Exception:
+            continue
+    return out
+
+
+def _parse_tpex_snapshot(raw) -> dict:
+    """TPEx 主板日行情原始回應(list[dict])→ {ticker: (price, iso_date)}。"""
+    out = {}
+    if not isinstance(raw, list):
+        return out
+    for row in raw:
+        try:
+            code = row.get("SecuritiesCompanyCode")
+            price = _tw_official_num(row.get("Close"))
+            date = _roc_date_to_iso(row.get("Date"))
+            if code and price and date:
+                out[str(code)] = (price, date)
+        except Exception:
+            continue
+    return out
+
+
+def _market_snapshot(memo: dict, url: str, parse_fn, now=None):
+    """`memo`(模組層 dict,原地更新:`_TWSE_SNAPSHOT_MEMO` 或
+    `_TPEX_SNAPSHOT_MEMO`)的 get-or-fetch。成功新鮮度沿用工單 013
+    `_tw_cache_fresh` 的 EOD 邊界規則(不發明新規則)——同一交易日內重複呼叫
+    共用同一份 memo,跨過收盤更新邊界才重打。`now` 可注入(測試釘假時鐘),
+    預設 `_now_tpe()`。
+
+    工單 017 reviewer 修正包 G3(P1-3 根修 + P2-1):
+    * (a) 抓到的資料若不是 dict 或是空 dict(`_parse_twse_snapshot`/
+      `_parse_tpex_snapshot` 在輸入不是預期的 list、或全部列都解析失敗時會
+      回傳 `{}`),視為「這次抓取沒有可用結果」,跟例外一樣走失敗分支——
+      不能被記成「成功」memo(空 dict 一旦被當成功快取,`_tw_cache_fresh`
+      的 EOD 邊界會讓後面整個交易日都直接回傳這個空結果,不會再嘗試)。
+    * (b) 失敗(例外、或 (a) 判定的空/非 dict 結果)時記
+      `memo["failed_at"]=now`;若 `failed_at` 存在且距 `now` 未滿
+      `_FALLBACK_NEGATIVE_MEMO_MINUTES`(15 分,沿用 013 的「安全地板」概念,
+      不是 EOD 邊界判斷),直接回傳現有的 `memo["data"]`(可能是 None)而
+      **不重打**——全市場故障時,同一輪的第一檔付出真正的探測成本(含
+      `_retry` 三次重試),之後 15 分鐘內的其他檔位直接短路,不會每檔各自
+      重打兩個端點(這是 P1-3 對應的真實重現:全網路故障時每檔都各自重試
+      兩端點,單輪最壞可以疊加到近一小時)。成功一次後會清掉 `failed_at`。
+    * (c) 呼叫 `_http_get_json` 明確帶 `timeout=10`(而非預設 25 秒)——同樣
+      是為了壓低「全故障但連線是掛著、不是立刻 refuse」這種最壞情境下,
+      單次探測的耗時上限(10 秒 × `_retry` 三次嘗試,遠低於 25 秒 × 3 次)。
+
+    已知限制(P2-4,記錄不修):這裡的 `_tw_cache_fresh` 呼叫用預設
+    `eod_hour=18`/`floor_minutes=15.0`,**不吃** `providers_cfg` 的
+    `tw_eod_hour`/`cache_minutes` 覆寫(那兩個設定只影響 `fetch()` 開頭的
+    blob 層新鮮度判斷)。也就是說,即使使用者把 `tw_eod_hour` 設成別的時間,
+    這裡的 TWSE/TPEx 全市場 memo 仍然用 18:00 當邊界。影響範圍很小(memo 只是
+    「同一輪內不要重打」的效能優化,不是資料正確性的一部分——邊界設定不同
+    頂多讓 memo 早一點或晚一點重打,不影響備援本身查到的官方 EOD 價格是否
+    正確),故不在本工單修正,留給未來若真的有需求再處理。
+    """
+    now = now if now is not None else _now_tpe()
+    if memo["data"] is not None and memo["fetched_at"] is not None \
+            and _tw_cache_fresh(memo["fetched_at"], now):
+        return memo["data"]
+    failed_at = memo.get("failed_at")
+    if failed_at is not None and _cache_age_minutes(failed_at, now) < _FALLBACK_NEGATIVE_MEMO_MINUTES:
+        return memo["data"]
+    try:
+        data = parse_fn(_http_get_json(url, timeout=10))
+        if not isinstance(data, dict) or not data:
+            raise ValueError("empty or non-dict market snapshot")
+    except Exception:
+        memo["failed_at"] = now
+        return memo["data"]
+    memo["data"] = data
+    memo["fetched_at"] = now
+    memo["failed_at"] = None
+    return data
+
+
+def _twse_fallback_quote(ticker: str, now=None):
+    """TWSE STOCK_DAY_ALL 備援查價。回傳 `(price, price_date) | None`。"""
+    snap = _market_snapshot(_TWSE_SNAPSHOT_MEMO, TWSE_STOCK_DAY_ALL, _parse_twse_snapshot, now)
+    return snap.get(str(ticker)) if snap else None
+
+
+def _tpex_fallback_quote(ticker: str, now=None):
+    """TPEx 主板日行情備援查價。回傳 `(price, price_date) | None`。"""
+    snap = _market_snapshot(_TPEX_SNAPSHOT_MEMO, TPEX_MAINBOARD_DAILY_CLOSE_QUOTES,
+                             _parse_tpex_snapshot, now)
+    return snap.get(str(ticker)) if snap else None
+
+
+def _assemble_tw_fallback(ticker: str, name: str, price: float, price_date: str,
+                           source_label: str, requested_start: str) -> StockData:
+    """FinMind 失敗、TWSE/TPEx 備援查到現價後組裝 StockData。`price`/`price_date`
+    一律用官方 EOD(最新、最權威),不被下面組裝出來的歷史序列覆蓋。不呼叫
+    FinMind(已經失敗),因此不走 `_sync_and_assemble` 的全量/增量骨架。
+
+    歷史序列來源(工單 017 reviewer 修正包 G1a,P1-1 根修之一):**store 優先,
+    store 空/不可用時退回上一份 blob 快取**——
+    * store(`history_store`)有價格資料 → 用 store(原始 FinMind 值),這裡
+      才需要對它跑 `_back_adjust_tw` 做拆股/反分割還原。
+    * store 沒有(從未成功抓過 / sqlite 不可用)→ 改用 `_load_cache_raw`
+      (無視新鮮度)讀「上一份成功寫入的 blob」。blob 裡的 price_history/
+      div_history/per_history 是 `fetch_tw` 存進 blob 前**已經**跑過
+      `_back_adjust_tw` 的最終序列——這裡**絕對不能再對它跑一次**
+      `_back_adjust_tw`,否則等於對已經還原過的價格再套一次還原因子(二次
+      還原,數值會被弄壞)。store/blob 兩條路徑刻意分開處理,不共用同一段
+      還原程式碼。
+    目的:備援結果嚴格 ≥ 舊有的 stale-rescue(官方新價 + 最佳可得歷史),
+    yield_band/price_band(auto)在「store 空但有舊 blob」時不再變成
+    `ValuationError`;真的兩者都沒有時,才會自然走到既有 `ValuationError`
+    路徑(不是這裡的職責)。
+
+    尺度護欄(G2,P1-2):組裝完成後若官方現價與序列尾端的比值跳動異常(疑似
+    拆股或資料不一致),整組捨棄三個歷史序列,避免用「錯尺度」的歷史算出
+    誤導的分類/機率(寧可誠實 ValuationError,不要假訊號)。
+    """
+    d = StockData(ticker=ticker, market="TW", name=name, currency="TWD",
+                  source=source_label, price=price, price_date=price_date)
+
+    store_price_rows = history_store.get_price(CACHE_DIR, "TW", ticker, start_date=requested_start)
+    per_rows = None            # 只有 store 分支才有 (date, per, dividend_yield) 三元組
+    blob_data = None           # 只有 blob 分支才會設值(供下面 PER 護欄回退用)
+    if store_price_rows:
+        div_rows = history_store.get_dividend(CACHE_DIR, "TW", ticker, start_date=requested_start) or []
+        d.price_history, d.div_history = _back_adjust_tw(list(store_price_rows), list(div_rows))
+        per_rows = history_store.get_per(CACHE_DIR, "TW", ticker, start_date=requested_start) or []
+        if per_rows:
+            d.per_history = [(dt, p) for dt, p, dy in per_rows if p not in (None, 0)]
+    else:
+        blob_loaded = _load_cache_raw("TW", ticker)
+        blob_data = blob_loaded[0] if blob_loaded is not None else None
+        if blob_data is not None:
+            d.price_history = list(blob_data.price_history or [])
+            d.div_history = list(blob_data.div_history or [])
+            d.per_history = list(blob_data.per_history or [])
+
+    # G2:官方現價與本地歷史尾端「尺度脫鉤」護欄。門檻 0.6/1.7 刻意複製自
+    # `_back_adjust_tw` 判斷「真正整數倍拆股/反分割」的同一組數字(該函數內
+    # `if r < 0.6 or r > 1.7:` 那行)——沒有讓 `_back_adjust_tw` 改成引用共用
+    # 常數,是為了不去動 FinMind 成功路徑的既有程式碼(byte-untouched 紅線);
+    # 這裡刻意複製而非重構共用,兩處數字之後如需調整必須同步修改。
+    if d.price_history:
+        last_close = d.price_history[-1][1]
+        if last_close and d.price:
+            r = d.price / last_close
+            if r < 0.6 or r > 1.7:
+                d.price_history, d.div_history, d.per_history = [], [], []
+                d.quality_warnings.append(
+                    f"官方現價({d.price})與本地歷史尾端({last_close})跳動異常"
+                    f"(比值≈{r:.2f}),疑似拆股或資料不一致,已捨棄歷史序列以避免誤判。"
+                )
+
+    cutoff = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+    if d.div_history:
+        d.annual_dividend = round(sum(c for ex, c in d.div_history if ex > cutoff), 4)
+        if d.annual_dividend and d.price:
+            d.dividend_yield = d.annual_dividend / d.price
+
+    # PER/trailing_eps(可能覆蓋上面算出的 dividend_yield,較新/官方來源優先)
+    # ——同工單 014 reviewer 修正包 F3 護欄:PER 最新一筆與現價日相差 >10 天
+    # 就不派生,避免拿過期 PER 配上今天的官方 EOD 現價算出誤導的隱含估值。
+    if per_rows:  # store 分支:有原始三元組,沿用既有 F3 邏輯
+        last_dt, last_p, last_dy = per_rows[-1]
+        if d.per_history and _days_between(last_dt, d.price_date) <= 10:
+            d.per = float(last_p) if last_p else None
+            if last_dy:
+                d.dividend_yield = float(last_dy) / 100.0
+            if d.per and d.price:
+                d.trailing_eps = round(d.price / d.per, 4)
+    elif blob_data is not None and d.per_history:
+        # blob 分支:blob 沒有保留 FinMind PER 表原始的三元組,只有 (date, per)
+        # 河流圖點位;沿用 blob 當時已經算好的 per/trailing_eps/dividend_yield,
+        # 用 blob per_history 最後一筆的日期(而不是 blob 當時的舊 price_date)
+        # 對「現在」的官方 EOD price_date 做同一套 10 天新鮮度護欄。
+        last_dt = d.per_history[-1][0]
+        if _days_between(last_dt, d.price_date) <= 10:
+            d.per = blob_data.per
+            d.trailing_eps = blob_data.trailing_eps
+            if blob_data.dividend_yield:
+                d.dividend_yield = blob_data.dividend_yield
+
+    d.quality_warnings = d.quality_warnings + _series_quality_warnings(d.price_history)
+    d.quality_warnings.append(
+        f"FinMind 抓取失敗,現價已切換至{source_label}官方 EOD;"
+        "歷史序列(price_history/per_history/div_history)組裝自本地快取,可能不完整。"
+    )
+    return d
+
+
 def fetch_tw(ticker: str, name: str, years: int, token: str = "", method: str = "") -> StockData:
     start = (datetime.now() - timedelta(days=int(years * 365.25) + 10)).strftime("%Y-%m-%d")
     d = StockData(ticker=ticker, market="TW", name=name, currency="TWD", source="FinMind")
@@ -430,6 +738,37 @@ def fetch_tw(ticker: str, name: str, years: int, token: str = "", method: str = 
             d.error = "FinMind 免費額度用罄(402)。約 1 小時後自動重置;或到 finmindtrade.com 申請免費 token 設為 FINMIND_TOKEN 提高額度。"
         else:
             d.error = f"FinMind 價格抓取失敗: {e}"
+        # 工單 017:FinMind 價格抓取失敗 → 退而求其次試 TWSE(上市)/TPEx(上櫃)
+        # 官方備援(免金鑰、全市場單次呼叫,process 內 memoize,見上方章節)。
+        # 找到 → 備援成功,回傳全新組裝的 StockData(ok()==True,不沿用上面
+        # 剛設的 d.error,讓 fetch() 的 `if data.ok(): _save_cache(...)` 正常
+        # 接手、blob/EOD 新鮮度自然生效,但 G1b 之後備援結果本身不會被存進
+        # blob,見 fetch() 的說明)。兩端點都沒有這個代號(或都失敗)→ 維持
+        # 現狀:原樣回傳帶 error 的 d,交給 fetch() 既有的過期快取保命
+        # (stale-rescue)。
+        # 工單 017 reviewer 修正包 G6(P3-1):`_twse_fallback_quote`/
+        # `_tpex_fallback_quote` 本身已經在 `_market_snapshot` 內部把 HTTP/
+        # 解析例外都吞掉,理論上不會再往外拋;這裡額外包一層 try/except 是
+        # 防禦性寫法(例如 `snap.get(str(ticker))` 這類查找本身若因為極端邊角
+        # 情況拋出未預期例外),確保任何例外都不逸出、一律維持原本的 error
+        # 路徑 `return d`,不讓 fetch_tw 整個崩掉。備援組裝
+        # (`_assemble_tw_fallback`)本身若意外拋例外一樣吞掉退回現狀路徑。
+        fb = None
+        source_label = ""
+        try:
+            fb = _twse_fallback_quote(ticker)
+            source_label = "TWSE(備援)"
+            if fb is None:
+                fb = _tpex_fallback_quote(ticker)
+                source_label = "TPEx(備援)"
+        except Exception:
+            fb = None
+        if fb is not None:
+            price, price_date = fb
+            try:
+                return _assemble_tw_fallback(ticker, name, price, price_date, source_label, start)
+            except Exception:
+                pass
         return d
     # 為省 FinMind 額度:PER 只給 pe_band(含 auto 河流圖)、配息只給 yield_band。
     if method == "pe_band":
@@ -726,7 +1065,32 @@ def fetch(stock_cfg: dict, providers_cfg: dict, history_years: int, use_cache: b
         data = StockData(ticker=ticker, market=market, name=name, error=f"未知市場 {market}")
 
     if data.ok():
-        _save_cache(data)
+        # 工單 017 reviewer 修正包 G1b(P1-1 根修之二):台股 TWSE/TPEx 備援結果
+        # **不寫入 blob**。約定:`_assemble_tw_fallback` 一律把 `source` 標成含
+        # 「(備援)」字樣(見 `_twse_fallback_quote`/`_tpex_fallback_quote` 呼叫端
+        # 設的 `source_label`,目前是 "TWSE(備援)"/"TPEx(備援)");這裡用字串
+        # 內容判斷是否跳過寫入,不是新增欄位——好處是零風險延伸既有的
+        # StockData(不必改 dataclass 欄位、不必動 blob 序列化格式),代價是
+        # 「約定」而非型別保證,未來任何新的資料來源如果也想要「成功但不快取」
+        # 的語意,必須遵守同一個「source 含 (備援)」的字串慣例,或請另開工單
+        # 把這裡改成更嚴謹的機制(例如 StockData 新增明確欄位)。
+        #
+        # 原因(對應 reviewer 發現的 P1-1 真實重現:0056 的 blob 被降級快照
+        # 覆蓋,之後 auto 類估價變 ValuationError 且救不回來):備援結果的
+        # 歷史序列品質通常不如完整 FinMind 序列(即使有 G1a 的 store/blob 退援,
+        # 也可能還是比不上「FinMind 這一輪真的成功時」的完整度)。如果照舊寫進
+        # blob,台股 EOD-aware 新鮮度(工單 013)會把這份「降級快照」當成新鮮
+        # 資料釘住,直到下一個平日 18:00 邊界(最長可達 22~71 小時)才會重新
+        # 嘗試 FinMind——這段期間即使 FinMind 早就恢復正常,使用者也只能看到
+        # 這份降級結果,完整的舊 blob(可能還留有更好的歷史)也已經被覆蓋掉、
+        # 回不去了。不寫入 blob 之後:(1) 舊的完整 blob(如果有)永遠不會被
+        # 降級快照蓋掉,下次 store 也空時 G1a 還能繼續退回這份好資料;
+        # (2) 因為 blob 的 `_fetched_at` 沒有被更新,下一輪 `fetch()` 的
+        # TW 分支新鮮度判斷會看到「舊」時間戳,FinMind 一恢復正常就會在下一輪
+        # 立刻被重新嘗試並覆蓋回正常路徑,不會被 EOD 新鮮度多釘住一整個交易日
+        # 甚至更久。stale-rescue 區塊(下面)完全不受影響,原樣沿用。
+        if "(備援)" not in (data.source or ""):
+            _save_cache(data)
         return data
     # 線上抓取失敗(雲端常因 yfinance 被限流)→ 退回任何「過期」快取保命:
     # 顯示上次成功抓到的資料(標記為過期快取),好過整檔變「錯誤」消失。

@@ -16,6 +16,7 @@ US 27:pe_band 16/ps_band 6/price_band 固定帶 5;INTL 5:price_band)。
 | US(無金鑰) | — | — | ~2(history 含 retry×3 + info) | 雲端易 429 |
 | INTL(.L) | — | — | ~2 | Finnhub 免費不支援 LSE |
 | 匯率 usd_twd | — | — | — | exchangerate-api 1 次 |
+| **TW 官方備援**(僅 FinMind price 抓取失敗時觸發,工單 017;call 數模型於 reviewer 修正包 G3 更新) | 0(FinMind 健康時不觸發) | — | — | 觸發時:**成功時各最多 1 次/EOD 邊界**(皆免金鑰,不佔 FinMind/Finnhub 額度)——兩者都是「一次呼叫回全市場當日收盤」,process 內 memo 共用,同一輪(screen/watch 跑多檔)全部台股標的共用這次成功結果,不隨檔數增加,跨過工單 013 的 EOD 邊界才重打;找到代號才算「觸發成功」,兩端點都沒有該代號時仍算成功 memo(不重打)。**失敗時**(端點本身也掛、逾時、回應非預期格式)有 **15 分鐘負向 memo 冷卻**(G3b):同一輪內同一端點第一次失敗後,15 分鐘內其他檔位直接短路不重打,15 分鐘後才會再嘗試 1 次;每次真正探測都含 `_retry` 三次重試(`timeout=10`,G3c),把「全端點都掛、逐檔重打」的最壞情境從單輪可疊加到近一小時,壓到單輪只有第一檔付出真正探測成本 |
 
 ## 2. 每指令/場景的呼叫數上限(全部 cache miss 的最壞情況)
 
@@ -25,7 +26,7 @@ US 27:pe_band 16/ps_band 6/price_band 固定帶 5;INTL 5:price_band)。
 | `report` / `screen` 全清單(57 檔) | **36**(cache miss 當次;§1 的每檔成本表,worst case) | 54 | ~64 | FinMind 12%/hr;**Finnhub 54 接近 60/min**(序列執行有自然間隔,實務約 30–60s 內發出,邊緣) |
 | Dashboard 冷載入(總覽全清單) | 36(cache miss 當次) | 54 | ~64 | 同上;**happy path**(抓取成功、快取正常寫入)下 TW 之後在同一交易日內幾乎 0(EOD-aware,工單 013,見 §3),US/INTL 仍是 15 分鐘內幾乎 0。**失敗模式**:抓取失敗時 `_save_cache` 不寫入(見 providers.py `if data.ok(): _save_cache(...)`),下一輪仍是 cache miss、仍要打滿 36/54/~64——EOD-aware 只降低「成功後的重複讀取」,不改善「持續失敗時每輪都重抓」的情況 |
 | `roi <ticker> <amt>`(跨幣別) | 1–2 | 0–2 | 0–2 | +1 次匯率 |
-| **`watch --interval 300`(預設,已修工單 008;TW 已加碼工單 013)** | **happy path:TW ≈36/天**(EOD-aware,一天內跨過交易日邊界才重抓,與 interval 無關,工單 013)。**worst case(FinMind 402/斷線等持續失敗期間)**:失敗不寫快取 → 每輪仍是 36 FinMind(全清單),回到工單 008 修復前的量級,`--interval 300` 下仍是 **432/hr**,需仰賴 `_retry` 指數退避與過期快取保命撐過去,不是「怎樣都安全」。US/INTL 抓取量不算在此欄(FinMind 專用) | 54/首輪,之後多輪共用(15分 TTL 不變) | ~64/首輪,之後多輪共用(15分 TTL 不變) | happy path 下 TW 額度需求遠低於工單 008 時代;持續失敗時退化回等量 |
+| **`watch --interval 300`(預設,已修工單 008;TW 已加碼工單 013)** | **happy path:TW ≈36/天**(EOD-aware,一天內跨過交易日邊界才重抓,與 interval 無關,工單 013)。**worst case(FinMind 402/斷線等持續失敗期間)**:失敗不寫快取 → 每輪仍是 36 FinMind(全清單),回到工單 008 修復前的量級,`--interval 300` 下仍是 **432/hr**,需仰賴 `_retry` 指數退避與過期快取保命撐過去,不是「怎樣都安全」。US/INTL 抓取量不算在此欄(FinMind 專用)。**工單 017 更新(reviewer 修正包 G1b 之後的真實模型)**:台股 TWSE/TPEx 備援結果**不寫入 blob**(G1b)——這代表 blob 的新鮮度只由「上一次 FinMind 真正成功」的時間戳決定,備援再怎麼成功也不會讓 blob 看起來新鮮。換言之:一旦既有 blob 跨過 EOD 邊界過期,**備援期間每一輪都會照常先打 FinMind 探測**(每檔 1 次,額度壓力與工單 008 之前描述的 worst case 相同,不會因為有備援就下降),FinMind 失敗才觸發備援;但**只要 FinMind 有一次恢復成功,那一輪就立刻寫回正常 blob、回到 happy path**,不會像「若備援結果寫 blob」那樣被 EOD 新鮮度誤判凍結在降級快照上長達 22~71 小時(這正是 G1a/G1b 修正的 P1-1 真實重現)。**每輪額外只加 TWSE+TPEx 最多各 1 次**(免金鑰、process memo 共用全清單,不隨檔數增加、也不隨輪數線性增加——只在跨過 EOD 邊界或負向 memo 冷卻期滿時才各重打 1 次,見上方 §1),換到大多數台股標的能顯示官方 EOD 現價與明確帶分類,而不是整輪只剩過期快取;**不改變 FinMind 額度本身的壓力**,是「多一條命 + 更快恢復正常路徑」,不是「省 FinMind 額度」 | 54/首輪,之後多輪共用(15分 TTL 不變) | ~64/首輪,之後多輪共用(15分 TTL 不變) | happy path 下 TW 額度需求遠低於工單 008 時代;持續失敗時退化回等量(FinMind 側),另加 TWSE/TPEx 極小額外呼叫(見上方 §1 備援列) |
 
 ## 3. 快取層(現狀確認)
 
@@ -193,3 +194,26 @@ US 27:pe_band 16/ps_band 6/price_band 固定帶 5;INTL 5:price_band)。
 > fetch_us 組裝完成後附掛,不影響估價/分類/ROI 數值),blob 快取多一個欄位但已在
 > `_load_cache_raw` 過濾未知鍵確保新舊版互讀不炸,§1/§2 呼叫數表與快取新鮮度規則全部
 > 不變,0 新增 API 呼叫。
+> 工單 017(2026-08)新增 TWSE(上市)/TPEx(上櫃)官方 OpenAPI 備援,**只在 FinMind
+> price 抓取失敗時觸發**(見上方新增的 §1 備援列與 §2 `watch` 列更新),兩端點皆免金鑰、
+> 一次呼叫回全市場當日收盤,process 內 memo(重用工單 013 `_tw_cache_fresh` 的 EOD
+> 邊界規則判斷失效)讓同一輪最多各打 1 次,不隨檔數增加。FinMind 健康時的呼叫數
+> (§1/§2 既有表格數字)**逐位不變、0 新增呼叫**(regression 測試鎖住,見
+> `tests/test_twse_fallback.py` 的「FinMind 正常時 → TWSE/TPEx 呼叫數 == 0」)。
+> 一次性 schema 確認呼叫:各打 1 次 TWSE `exchangeReport/STOCK_DAY_ALL`、TPEx
+> `tpex_mainboard_daily_close_quotes`(SPEC 明文允許,非額度紅線;之後測試全離線)。
+> 黃金值交叉驗收 2 次 FinMind(2330 為 pe_band,Price+PER,FinMind 健康,備援未觸發),
+> 結果與改動前一致(便宜 2228.57 / 大特 1731.23)。
+> **工單 017 reviewer 修正包(2026-08,G1–G8)**:三條 P1 真實重現後仲裁修正,呼叫數模型
+> 有實質更新(上方 §1 備援列、§2 `watch` 列已同步改寫,不是本段重複)——重點:
+> (a) G1b 台股備援結果**不寫入 blob**,所以「FinMind 呼叫數不變」不再只是巧合式描述,
+> 而是 G1b 直接導致的必然結果(blob 新鮮度只認 FinMind 真正成功的時間戳,備援期間
+> 每輪都會照常先探測 FinMind,一旦恢復立刻回正常路徑,不會被 EOD 新鮮度多釘住);
+> (b) G3 幫 TWSE/TPEx 備援呼叫本身加上 15 分鐘負向 memo + `timeout=10`,把「全端點
+> 故障時逐檔重打兩端點,單輪最壞可疊加到近一小時」壓到「單輪只有第一檔付出真正探測
+> 成本」;G1a/G2(歷史來源 store 優先退回舊 blob + 尺度脫鉤護欄)則是資料正確性修正,
+> 不影響呼叫數,但避免了 auto 類估價假 ValuationError 與尺度脫鉤產生的假 is_buy 訊號。
+> FinMind 健康路徑呼叫數(§1/§2 既有表格數字)**仍然逐位不變、0 新增呼叫**(210 題
+> regression 全綠,新增 48 題於 `tests/test_twse_fallback.py`);黃金值再次交叉驗收
+> 2 次 FinMind(cache-miss 強制重抓),結果一致(便宜 2228.57 / 大特 1731.23 /
+> forward_EPS 135.147)。
