@@ -189,3 +189,7 @@ US 27:pe_band 16/ps_band 6/price_band 固定帶 5;INTL 5:price_band)。
 > 可讀不可寫時記憶體合併保底)、P1-2a(增量回空視為失敗)、P1-2b(PER 派生 10 天新鮮度
 > 護欄)、配息完全撤出增量(恢復 014 之前原始碼路徑)。呼叫次數與 API 額度結論不變,
 > 黃金值再次交叉驗收 2 次 FinMind,結果一致。
+> 工單 015(2026-08)為純本地缺口/尾端過舊偵測(`StockData.quality_warnings`,fetch_tw/
+> fetch_us 組裝完成後附掛,不影響估價/分類/ROI 數值),blob 快取多一個欄位但已在
+> `_load_cache_raw` 過濾未知鍵確保新舊版互讀不炸,§1/§2 呼叫數表與快取新鮮度規則全部
+> 不變,0 新增 API 呼叫。

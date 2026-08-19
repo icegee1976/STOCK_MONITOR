@@ -16,7 +16,7 @@ import os
 import time
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, fields, asdict
 from datetime import datetime, timedelta, timezone
 
 from . import history_store  # 工單 014:本地 sqlite 歷史庫(台股增量、美股全量快照)
@@ -42,11 +42,19 @@ class StockData:
     price_history: list = field(default_factory=list)   # [(date, close), ...] 舊→新
     per_history: list = field(default_factory=list)     # [(date, per), ...]
     per_history_approx: bool = False  # 美股的 PER 河流圖是近似(price/現EPS)
+    quality_warnings: list = field(default_factory=list)  # 015:缺口/尾端過舊偵測告知
     source: str = ""
     error: str = ""
 
     def ok(self) -> bool:
         return self.price is not None and self.error == ""
+
+
+# blob 相容:_load_cache_raw 用這個集合過濾快取 JSON 裡的未知鍵,避免「新版寫入的
+# blob 裡有現在 dataclass 沒有的欄位」(例如新增/移除欄位期間的新舊版互讀,或未來
+# 欄位)時 `StockData(**blob)` 因為多餘的 keyword argument 直接 TypeError——已用
+# python 實測驗證缺鍵會被 default_factory 正常補上、但多鍵會炸,細節見工單 015 PLAN。
+_STOCKDATA_FIELD_NAMES = {f.name for f in fields(StockData)}
 
 
 # --------------------------------------------------------------------------- #
@@ -164,6 +172,8 @@ def _load_cache_raw(market: str, ticker: str):
             blob = json.load(f)
         fetched_at = _parse_fetched_at(blob["_fetched_at"])
         blob.pop("_fetched_at", None)
+        # 過濾掉 dataclass 沒有的鍵(向前相容,見上方 _STOCKDATA_FIELD_NAMES 註解)。
+        blob = {k: v for k, v in blob.items() if k in _STOCKDATA_FIELD_NAMES}
         return StockData(**blob), fetched_at
     except Exception:
         return None
@@ -190,6 +200,46 @@ def _save_cache(data: StockData):
             json.dump(blob, f, ensure_ascii=False)
     except Exception:
         pass
+
+
+# --------------------------------------------------------------------------- #
+#  資料品質:缺口/尾端過舊偵測(工單 015)
+#
+#  百分位/波動率/殖利率河流圖都假設歷史序列完整;FinMind/yfinance 若有資料缺口
+#  目前是靜默偏差。這裡只做「偵測 + 告知」,刻意**不自動補抓**(避免對缺口反覆
+#  重試造成呼叫風暴;真的要補資料屬人工判斷)。純函數、市場中立(TW/US/INTL
+#  共用同一份邏輯與同一個時鐘 _now_tpe——SPEC 明言美股用台北時鐘誤差一天無妨),
+#  不改變任何估價/分類/ROI 數值,只附掛在 StockData.quality_warnings 供顯示層
+#  (report.py/app.py)提醒使用者。
+# --------------------------------------------------------------------------- #
+GAP_WARNING_DAYS = 12          # 相鄰兩筆缺口 > 此門檻才警告(台股春節連假含前後
+                                # 週末最長約 11 天,12 為安全門檻,避免誤報正常連假)
+STALE_TAIL_WARNING_DAYS = 10   # 序列最後一筆距 now > 此門檻(抓取仍回報成功)才警告
+
+
+def _series_quality_warnings(price_history, now=None) -> list:
+    """偵測 `price_history`([(date_str, close), ...],不假設已排序)裡的資料缺口
+    與尾端過舊,回傳警告文字列表(可能為空)。序列 < 2 筆不檢查(既有空資料路徑
+    自有錯誤處理,這裡不重複判斷)。`now` 可注入(測試釘假時鐘),預設 `_now_tpe()`。
+    """
+    if len(price_history) < 2:
+        return []
+    now = now if now is not None else _now_tpe()
+    dates = sorted(d for d, _ in price_history)
+    warnings = []
+    for prev, cur in zip(dates, dates[1:]):
+        gap = _days_between(prev, cur)
+        if gap > GAP_WARNING_DAYS:
+            warnings.append(
+                f"資料缺口:{prev} ~ {cur}(相差 {gap} 天),期間百分位/波動率可能因此偏差。"
+            )
+    last_date = dates[-1]
+    tail_age = (now.date() - datetime.strptime(last_date, "%Y-%m-%d").date()).days
+    if tail_age > STALE_TAIL_WARNING_DAYS:
+        warnings.append(
+            f"最新資料為 {last_date},距今已 {tail_age} 天,百分位/波動率可能因此偏差。"
+        )
+    return warnings
 
 
 # --------------------------------------------------------------------------- #
@@ -464,6 +514,9 @@ def fetch_tw(ticker: str, name: str, years: int, token: str = "", method: str = 
         d.annual_dividend = round(sum(c for ex, c in d.div_history if ex > cutoff), 4)
         if d.annual_dividend and d.price and not d.dividend_yield:
             d.dividend_yield = d.annual_dividend / d.price
+    # 015:序列組裝(含拆股還原)完成後才偵測缺口/尾端過舊,純附加告知,不影響上面
+    # 任何已算完的數值。
+    d.quality_warnings = _series_quality_warnings(d.price_history)
     return d
 
 
@@ -517,6 +570,10 @@ def fetch_us_finnhub(ticker: str, name: str, years: int, key: str) -> StockData:
             # 工單 014 D3:美股全量快照(DELETE+INSERT,best-effort,不影響回傳值)。
             # 禁止用增量——理由見 history_store.replace_us_snapshot docstring。
             history_store.replace_us_snapshot(CACHE_DIR, d.market, ticker, d.price_history)
+            # 015:Finnhub 報價成功 + best-effort 歷史也到手的路徑,同樣附掛資料品質
+            # 偵測(雲端帶 Finnhub 金鑰的使用者主要走這條;歷史缺失時序列 <2 筆自然
+            # 回空清單,不誤報)。
+            d.quality_warnings = _series_quality_warnings(d.price_history)
         info = {}
         try:
             info = t.info or {}
@@ -563,6 +620,9 @@ def fetch_us(ticker: str, name: str, years: int) -> StockData:
             # 視為 0、報酬全反映在股價)也依賴單一連續 auto_adjust 序列。詳見
             # history_store.replace_us_snapshot docstring。
             history_store.replace_us_snapshot(CACHE_DIR, d.market, ticker, d.price_history)
+            # 015:price_history 在這裡是這次呼叫「組裝完成」的最終序列(yfinance
+            # auto_adjust=True 已內含拆股/配息還原,US/INTL 之後不再變動)。
+            d.quality_warnings = _series_quality_warnings(d.price_history)
         # 基本面 (info 可能慢/不穩,包起來)
         info = {}
         try:

@@ -108,6 +108,8 @@ def render_stock_card(item, config):
            "  (0=史上最低, 100=史上最高)")
     for w in z.get("warnings", []):
         _p(f"  [dim]· 注意:{w}[/dim]")
+    for w in data.quality_warnings:                    # 015:資料缺口/尾端過舊告知
+        _p(f"  [yellow]⚠ 資料品質:{w}[/yellow]")
     if cfg.get("note"):
         _p(f"  [dim]{cfg['note']}[/dim]")
 

@@ -94,7 +94,8 @@ def analyze_stock(ticker, _cfg, _config, stamp):
                    "currency": data.currency, "source": data.source,
                    "price_history": data.price_history,
                    "dividend_yield": data.dividend_yield,
-                   "trailing_eps": data.trailing_eps}
+                   "trailing_eps": data.trailing_eps,
+                   "quality_warnings": data.quality_warnings}  # 015:接線供個股分頁顯示
     try:
         z = compute_zones(_cfg, data, _config)
         out["zones"] = z
@@ -443,6 +444,8 @@ def _stock_tab_body():
                     st.markdown("　".join(f"{y}年內 **{p}%**" for y, p in probs.items()))
                 for w in z.get("warnings", []):
                     st.warning(w)
+                for w in d.get("quality_warnings", []):        # 015:資料缺口/尾端過舊
+                    st.warning(f"資料品質:{w}")
             if s_cfg.get("note"):
                 st.caption(s_cfg["note"])
 
