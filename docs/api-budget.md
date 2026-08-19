@@ -52,14 +52,109 @@ US 27:pe_band 16/ps_band 6/price_band 固定帶 5;INTL 5:price_band)。
    已修;monitor.py:160)**讀取仍會命中檔案快取**,不像本節先前版本描述的
    `use_cache=False`——15 分鐘 TTL(US/INTL)/EOD-aware(TW,工單 013)吸收
    輪詢,同快取週期內多輪共用同一批資料,不是每輪都全清單 live 抓取。
-4. **快取鍵的已知限制(未解,留待另開工單)**:檔案快取鍵是 `market_ticker`
-   (`_cache_path`),**不含** `history_years` 或 `valuation.method`。若使用者只是
-   改了 `watchlist.yaml` 裡某檔的估價假設(例如 pe_band 门檻、method 從
-   `price_band` 換成 `pe_band`)而沒有換 ticker,舊快取仍會被視為「新鮮」沿用,
+4. **快取鍵的已知限制(blob 層新鮮度視窗本身仍未解,留待另開工單)**:檔案快取鍵
+   是 `market_ticker`(`_cache_path`),**不含** `history_years` 或 `valuation.method`。
+   若使用者只是改了 `watchlist.yaml` 裡某檔的估價假設(例如 pe_band 门檻、method
+   從 `price_band` 換成 `pe_band`)而沒有換 ticker,舊快取仍會被視為「新鮮」沿用,
    直到自然過期(US/INTL 最長 15 分;TW EOD-aware 最長約 72 小時,週五收盤後
    改假設要等到週一收盤才會反映)。要立即看到新假設生效,請按側邊欄
    「🔄 重新抓取(清快取)」或手動刪除 `.cache/`。真正的解法(快取鍵納入
-   假設指紋,或另建本地歷史資料庫)留待未來工單,不在本工單範圍。
+   假設指紋)仍留待未來工單,不在本點範圍內。
+   **工單 014 更新(根治的是另一個獨立面向,不是這個 blob 新鮮度視窗)**:上述
+   「要等 TTL/EOD 邊界或手動清快取才看到新假設生效」這件事本身**沒有改變**——
+   014 沒有動 `_cache_path`/blob 讀寫邏輯。014 解的是:**台股在 blob 快取過期後
+   重新打 FinMind 時的 payload 大小**。013 之前(含 013),只要 blob 快取一過期,
+   `fetch_tw` 無論是不是真的有假設變動,每次都會把 `history_years` 整段(預設
+   5 年)重新下載一次。014 之後,同樣的呼叫次數(仍是每 dataset 1 次
+   `_finmind`,S8 契約不變),只在**首次**抓取、`history_years` 加深、或
+   `valuation.method` 切到從未抓過的 dataset 時才整段全量;其餘情況(單純
+   blob 快取自然過期後的例行重抓)只下載「上次成功之後的增量」。詳見下方第 5 點。
+5. **本地歷史庫 `.cache/history.sqlite3`(工單 014,台股限定;含 reviewer 修正包
+   F1–F4 後現狀)**:blob 快取(第 1 點)之下再加一層 stdlib `sqlite3` 耐久儲存
+   (`aimonitor/history_store.py`,WAL 模式、每次操作獨立連線、`timeout=2`),
+   疊加、不取代 blob 快取/EOD 新鮮度判斷/stale-rescue(三者行為與字串一律
+   未動)。運作方式(`fetch_tw` 接線):
+   - **價格/PER**(`_sync_and_assemble`):先讀 `series_meta` 判斷全量(無記錄、
+     或這次要求的窗起點比記錄的還早)vs 增量(`start_date` = store 內該序列
+     目前的 `MAX(date)`,含當天,重疊 1 筆防尾筆修訂)。呼叫 FinMind 後
+     best-effort upsert 進 store,**接著無條件在記憶體把這次剛抓到的原始
+     資料與 store 讀回的既有資料依日期合併**(reviewer 修正包 F1 根修)——
+     store 寫入是否真的成功,不影響這次組裝結果的正確性:store 全好時合併
+     是冪等無感;store「可讀不可寫」(真實檔案鎖、唯讀檔案系統等)時靠這次
+     記憶體裡的資料補位,fetch 仍然成功、資料仍然新鮮,只是這次沒能被
+     「下一次呼叫的增量」撿到而已(F1 修正前的舊設計會直接信任 store 讀回
+     結果,寫入失敗時讀到「寫入前」的舊資料而不自知,嚴重時整批新資料
+     消失、`d.ok()` 判 False 卻沒有清楚錯誤訊息,讓 blob 快取不更新、額度
+     保護失效——已用真實檔案鎖重現過並修復,見工單 014 REPORT)。**這時候
+     才對合併完的完整序列做一次拆股/反分割還原**(`_back_adjust_tw` 本體
+     零改動,只是搬到組裝之後才呼叫)——刻意不對每次增量各自局部還原,
+     否則拆股跨兩次增量會漏掉回頭修正較早那批資料(工單 014 REPORT 有
+     mutation 重演證據)。
+   - **增量回應異常偵測**(reviewer 修正包 F2):增量的 `start_date` 是 store
+     既有序列的 `MAX(date)`(含當天),正常情況下 FinMind 一定至少會回傳
+     這筆重疊列。若回應是空列表,視為異常(暫時性資料源問題等,不是「這段
+     期間真的沒有交易」),`fetch_tw` 判定失敗、設 `d.error`,交給 `fetch()`
+     既有的 stale-rescue 接手(標「(過期快取)」,恢復 014 之前「抓取失敗
+     就整檔 error」的語意)。全量抓取回空維持現狀不受影響(新上市無資料
+     等合法情況)。
+   - **PER 派生新鮮度護欄**(reviewer 修正包 F3):PER 增量之後,`d.per`/
+     `d.trailing_eps`/`d.dividend_yield` 只在 PER 最新一筆與 `d.price_date`
+     相差 <=10 天時才派生,超過門檻三者維持 `None`(避免拿過期的 PER 配上
+     今天的股價算出誤導的隱含估值)。`d.per_history`(河流圖用的歷史序列)
+     不受此限制,仍是完整歷史序列。014 之前 PER 跟價格永遠同一次 API 呼叫
+     抓回,天然不會有時間落差;增量之後兩個 dataset 各自步調可能不同步,
+     才需要這個護欄。
+   - **配息不做增量**(reviewer 修正包 F4):`yield_band` 的配息完全恢復
+     014 之前的原始碼路徑——每次都全量抓(`start_date` = 窗起點,仍是 1 次
+     `_finmind` 呼叫),`d.div_history` 直接用這次抓到的 raw 資料排序組裝,
+     不經 store 讀取組裝。原因:(1) FinMind `TaiwanStockDividend` 的
+     `start_date` 篩的是「公告日」欄位,不是 `CashExDividendTradingDate`
+     (除息日),兩者可能相差數月甚至跨年,拿「上次看到的除息日」當增量
+     游標語意對不上,可能漏抓「公告在游標之前、但除息日還沒發生」的紀錄;
+     (2) store 的 dividend 表 PK 是 `(market,ticker,ex_date)`,若同一
+     ex_date 曾有多筆紀錄(真實資料可能發生),upsert 會把現狀的 SUM 語意
+     破壞成 last-wins。對配息做增量是「零收益、有風險」。
+     `history_store.upsert_dividend` 仍保留呼叫,純粹當 best-effort 耐久
+     備份(供未來工單使用),**不參與**這次組裝。
+   - **呼叫次數不變**(每 dataset 仍 1 次 `_finmind`,S8 契約鎖住,見上方
+     §1/§2 的成本表原封不動);改變的只有**同樣次數下,單次呼叫的 payload
+     大小**(價格/PER 在 happy path 下從整段 N 年降到增量;配息本來就沒有
+     這個優化空間,payload 一直很小,不做也無妨)。
+   - **美股/INTL 不做增量,殘留全量重抓(正面陳述,非缺陷)**:
+     `fetch_us`/`fetch_us_finnhub` 每次成功後,把 `daily_price` 該 ticker
+     整檔 DELETE+INSERT 覆蓋(不是 upsert)。原因:yfinance `auto_adjust=True`
+     會隨後續拆股/配息事件回溯改寫已發生日期的收盤價,增量拼接會讓序列
+     前後尺度不一致;INTL 的 ROI total-return 語意(股利視為 0、報酬全
+     反映在股價)也依賴單一連續 auto_adjust 序列。**這代表美股/INTL 在
+     blob 快取過期後,每次都還是整段 `history_years` 年全量向 yfinance
+     要資料**——這不是本工單漏做優化,是刻意的正確性優先設計:美股沒有
+     FinMind 那種嚴格的每小時額度上限(yfinance 無公開額度、只有雲端機房
+     IP 才容易被限流),增量化帶來的節流收益本來就遠低於台股,不值得為了
+     省一點 payload 冒「auto_adjust 尺度不一致」的資料正確性風險。store
+     對 US/INTL 純粹是耐久備份用(供未來工單,例如 015 缺日偵測),讀路徑
+     完全不依賴它、逐位輸出與改動前一致。**快照寫入成本**:每次成功抓取
+     約 1250 列(5 年交易日)DELETE+INSERT,純本機 sqlite 操作,對整體
+     fetch 耗時無感。
+   - **永不炸**:sqlite 檔案損毀/鎖定/唯讀等任何例外一律在 `history_store.py`
+     內部吞掉(讀函數回傳 `None`、寫函數回傳 `False`,不外拋),`fetch_tw`
+     遇到 store 完全不可用(讀寫皆炸)或只是可讀不可寫,都靠記憶體合併
+     (見上方 F1)保證這次 fetch 仍然成功(離線測試已驗證兩種情境:垃圾
+     bytes 覆蓋 `history.sqlite3` 後讀寫全部安全降級;真實 patch 模擬
+     upsert 恆失敗、讀取正常時,merge 正確補位新舊資料)。
+   - **增量的固有代價(誠實揭露)**:一旦某天的價格/PER 值被寫進 store,
+     之後除非那天剛好又落在某次增量的重疊窗內,否則不會再被重新抓取——
+     若 FinMind 事後更正了某天的歷史數值,增量路徑不會自動吸收這個更正,
+     除非那天剛好是下一次增量的 `MAX(date)` 重疊列。**自癒手段**:
+     (a) 側邊欄「🔄 重新抓取(清快取)」或手動刪除 `.cache/`(含 sqlite 檔)
+     強制整批重來;(b) 把 `config.yaml` 的 `history_years` 調大又調回來,
+     會觸發一次全量回填。**定期全量重同步**(例如排程整批重建 sqlite)目前
+     不在本工單範圍,列入 backlog,留給未來工單視實際使用經驗決定是否需要。
+   - **`use_cache=False` 的範圍**:只繞過 blob 快取的新鮮度判斷(強制重新
+     打 FinMind),**不繞過**本地歷史庫——`fetch_tw` 一律照 SPEC D2 的全量/
+     增量規則走(store 是耐久資料層,不是「新不新鮮」的快取;現價本身的
+     新鮮度由「這次真的打了 live API」保證,跟要不要利用 store 裡的歷史
+     資料是兩件事)。換言之:`use_cache=False` 只影響「要不要打 API」,
+     不影響「打了 API 之後怎麼組裝」。
 
 ## 4. 發現(只記錄,修復需另開工單)
 
@@ -87,4 +182,10 @@ US 27:pe_band 16/ps_band 6/price_band 固定帶 5;INTL 5:price_band)。
 | **TW EOD-aware(工單 013,現行行為,happy path)** | **≈36/天**(只在跨過交易日 18:00 更新邊界時重抓,與 interval 幾乎無關;若持續抓取失敗則退化回 §2 所述的「每輪 36」worst case,不受 EOD-aware 保護) | — | 任意 | 300s(預設值)在 happy path 下遠低於風險線;確切降幅比例需視實際使用時數與輪詢頻率而定,未量化 |
 
 > 本審計 0 次 API 呼叫(純讀 code + 本地 watchlist 統計)。工單 013(2026-08)在既有審計基礎上
-> 補充 TW EOD-aware 快取變更;US/INTL 15 分固定 TTL 段落未動。
+> 補充 TW EOD-aware 快取變更;US/INTL 15 分固定 TTL 段落未動。工單 014(2026-08)新增
+> §3 第 5 點(本地歷史庫)、更新 §3 第 4 點的 P2-4 根治範圍;呼叫次數(§1/§2 表格)
+> 全部不變,0 新增 API 呼叫,黃金值交叉驗收 2 次 FinMind(2330 為 pe_band,Price+PER)。
+> 014 reviewer 修正包(2026-08,F1–F6)在合併前再次更新 §3 第 5 點:P1-1 根修(sqlite
+> 可讀不可寫時記憶體合併保底)、P1-2a(增量回空視為失敗)、P1-2b(PER 派生 10 天新鮮度
+> 護欄)、配息完全撤出增量(恢復 014 之前原始碼路徑)。呼叫次數與 API 額度結論不變,
+> 黃金值再次交叉驗收 2 次 FinMind,結果一致。

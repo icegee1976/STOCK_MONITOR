@@ -19,6 +19,8 @@ import urllib.request
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta, timezone
 
+from . import history_store  # 工單 014:本地 sqlite 歷史庫(台股增量、美股全量快照)
+
 CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".cache")
 
 
@@ -264,12 +266,112 @@ def _back_adjust_tw(price_history, div_history):
     return adj_px, adj_div
 
 
+def _days_between(a: str, b: str) -> int:
+    """兩個 "YYYY-MM-DD" 字串日期相差的天數(絕對值)。工單 014 reviewer 修正包
+    F3 用來判斷 PER 的「最新一筆」是否與現價「同一批」(見 fetch_tw pe_band 段落)。"""
+    return abs((datetime.strptime(a, "%Y-%m-%d") - datetime.strptime(b, "%Y-%m-%d")).days)
+
+
+def _merge_rows_by_key(base_rows, fresh_rows):
+    """依每筆 tuple 的第一個欄位(日期字串)為鍵合併——`fresh_rows`(這次剛抓到的
+    原始資料)覆蓋 `base_rows`(store 讀到的既有資料)同鍵的值,回傳依鍵升冪排序
+    的完整列表。price("date",close)/per("date",per,dividend_yield)兩種 tuple
+    形狀皆通用(只依賴「每筆第一個元素是可排序的日期字串」這個共同點)。
+
+    工單 014 reviewer 修正包 F1(P1-1 根修):sqlite「可讀不可寫」(例如另一支
+    process 持有寫鎖、或檔案系統唯讀)時,舊設計「upsert 後直接信任 get_fn 的
+    讀回結果」會讀到**寫入前的舊資料**而不自知(讀本身沒有例外、`get_fn` 回傳
+    非 None 的合法結果,只是內容還沒反映這次剛抓到的新資料)——導致
+    `d.price_history` 缺了這次的新資料、`d.price` 停在舊值,嚴重時全空的
+    StockData 還會讓 `d.ok()` 判 False、卻沒有清楚的 `d.error`,使 `fetch()`
+    不寫回 blob 快取、下一輪又整批重抓,額度保護整個失效。改成**無條件在記憶體
+    合併**:不管 store 寫入這次成功與否,一律拿「store 讀到的既有資料」與
+    「這次剛抓到的 raw_rows」合併,`raw_rows` 必定覆蓋對應日期——store 全部正常
+    時合併是冪等無感(讀回的本來就已經包含這次寫入的資料,合併結果不變);
+    store 寫入失敗時,靠這次記憶體裡的 raw_rows 補位,確保這次呼叫依然成功、
+    資料依然新鮮,只是這次的 upsert 沒有被「下一次呼叫的增量」撿到而已
+    (下次呼叫仍會照 SPEC D2 判斷全量/增量,不會因為這次沒寫成功而整個卡死)。"""
+    merged = {row[0]: row for row in base_rows}
+    merged.update({row[0]: row for row in fresh_rows})
+    return [merged[k] for k in sorted(merged)]
+
+
+def _sync_and_assemble(dataset: str, cache_dir: str, ticker: str, requested_start: str,
+                        fetch_fn, upsert_fn, get_fn):
+    """工單 014 D2 的全量/增量共用骨架。對單一 dataset("price"/"per",market 恆為
+    "TW" —— 此函數只服務 `fetch_tw`;配息自工單 014 reviewer 修正包 F4 起撤出,
+    改回每次全量、不經此函數,見 `fetch_tw` yield_band 段落)執行:
+
+    1. 讀 `series_meta.requested_start` 判斷全量 vs 增量(SPEC D2 point 1–2):
+       無記錄,或這次要求的窗起點比記錄的還早(history_years 加深/新 dataset,
+       含 method 切換)→ 全量,`fetch_fn` 的 start 參數 = 這次要求的窗起點;
+       否則增量,start = store 內該序列目前的 MAX(date)(含當天,重疊 1 筆靠
+       合併吸收,防尾筆修訂——SPEC D2 point 2)。
+    2. 呼叫 `fetch_fn(start)` 真正打 FinMind——**例外原樣往外拋**,不在這裡吞,
+       由呼叫端(`fetch_tw`)的 try/except 決定要不要致命(價格:致命,現狀
+       行為不變;PER:非致命,現狀行為不變)。
+    3. 呼叫成功則 upsert 進 store、更新 meta(皆 best-effort——store 的公開
+       函數已經「永不炸」,這裡不需要也不應該再包一層 try/except;寫入是否
+       真的成功不影響這次呼叫的正確性,見下方第 4 點與 `_merge_rows_by_key`)。
+    4. 從 store 取 `date >= requested_start` 的既有資料(不可用/無資料 → `[]`),
+       與這次剛抓到的 `raw_rows` **在記憶體合併**(F1 根修,見
+       `_merge_rows_by_key` docstring)後回傳——不論 store 讀寫是否正常,這次
+       結果都保證新鮮、正確。
+
+    回傳 `(merged_rows, incremental_empty)`:
+    - `merged_rows`:如上,**刻意不在這裡做 `_back_adjust_tw`**——那必須在
+      price/div 兩個組裝結果都到齊之後,由 `fetch_tw` 對「完整組裝序列」統一
+      呼叫一次(D2 point 4,本工單命脈:分割還原若對「單次增量」各自局部執行,
+      跨增量的分割會被漏掉一段,見工單 REPORT 的 mutation 重演)。
+    - `incremental_empty`:工單 014 reviewer 修正包 F2——這次走的是「增量」
+      分支、且 FinMind 回應是空列表時為 `True`(增量起點是 store 既有序列的
+      MAX(date),正常情況下這筆重疊列一定會被回傳,回空是異常訊號,交給
+      `fetch_tw` 決定要不要視為失敗);全量分支永遠是 `False`(全量抓到空是
+      現狀就允許的正常情況,例如新上市無資料)。
+    """
+    meta = history_store.get_meta(cache_dir, "TW", ticker, dataset)
+    is_full = meta is None or not meta.get("requested_start") or requested_start < meta["requested_start"]
+    if is_full:
+        fetch_start = requested_start          # 全量:抓「這次要求的窗起點」
+        keep_start = requested_start
+    else:
+        fetch_start = history_store.max_date(cache_dir, "TW", ticker, dataset) or requested_start
+        keep_start = meta["requested_start"]   # 增量:窗深度不變,requested_start 維持原記錄
+
+    raw_rows = fetch_fn(fetch_start)           # 例外原樣往外拋,呼叫端接
+    incremental_empty = (not is_full) and (not raw_rows)
+
+    upsert_fn(cache_dir, "TW", ticker, raw_rows)   # best-effort;失敗不影響下面的組裝正確性
+    history_store.set_meta(cache_dir, "TW", ticker, dataset, keep_start,
+                            datetime.now(timezone.utc).isoformat())
+
+    stored = get_fn(cache_dir, "TW", ticker, start_date=requested_start) or []
+    return _merge_rows_by_key(stored, raw_rows), incremental_empty
+
+
 def fetch_tw(ticker: str, name: str, years: int, token: str = "", method: str = "") -> StockData:
     start = (datetime.now() - timedelta(days=int(years * 365.25) + 10)).strftime("%Y-%m-%d")
     d = StockData(ticker=ticker, market="TW", name=name, currency="TWD", source="FinMind")
     try:
-        prices = _finmind("TaiwanStockPrice", ticker, start, token)
-        d.price_history = [(r["date"], float(r["close"])) for r in prices if r.get("close")]
+        def _fetch_price(s):
+            prices = _finmind("TaiwanStockPrice", ticker, s, token)
+            return [(r["date"], float(r["close"])) for r in prices if r.get("close")]
+
+        price_rows, price_incremental_empty = _sync_and_assemble(
+            "price", CACHE_DIR, ticker, start, _fetch_price,
+            history_store.upsert_price, history_store.get_price,
+        )
+        if price_incremental_empty:
+            # 工單 014 reviewer 修正包 F2(P1-2a):增量起點 = store 內既有序列的
+            # MAX(date)(含當天),正常情況下 FinMind 一定至少會回傳這筆重疊列
+            # ——回空代表異常(暫時性資料源問題等),不是「這段期間真的沒有
+            # 交易」。視為失敗,讓 fetch() 的 stale-rescue(過期快取保命)接手,
+            # 不要把「查無資料」誤當成功、寫回一個縮水的快取蓋掉可能還新鮮的
+            # 資料(恢復 014 之前「抓取失敗就整檔 error」的語意)。全量抓取回空
+            # 則維持現狀不變(新上市無資料等合法情況,不受此檢查影響)。
+            d.error = "FinMind 增量回應為空(無新資料),沿用快取。"
+            return d
+        d.price_history = list(price_rows)
         if d.price_history:
             d.price = d.price_history[-1][1]
             d.price_date = d.price_history[-1][0]
@@ -282,19 +384,58 @@ def fetch_tw(ticker: str, name: str, years: int, token: str = "", method: str = 
     # 為省 FinMind 額度:PER 只給 pe_band(含 auto 河流圖)、配息只給 yield_band。
     if method == "pe_band":
         try:
-            per = _finmind("TaiwanStockPER", ticker, start, token)
-            d.per_history = [(r["date"], float(r["PER"])) for r in per if r.get("PER") not in (None, 0)]
-            if per:
-                last = per[-1]
-                d.per = float(last["PER"]) if last.get("PER") else None
-                dy = last.get("dividend_yield")
-                d.dividend_yield = float(dy) / 100.0 if dy else None
-                if d.per and d.price:
-                    d.trailing_eps = round(d.price / d.per, 4)  # EPS = 股價 / 本益比
+            def _fetch_per(s):
+                per = _finmind("TaiwanStockPER", ticker, s, token)
+                rows = []
+                for r in per:
+                    raw_per = r.get("PER")
+                    p_val = float(raw_per) if raw_per not in (None, 0) else None
+                    dy = r.get("dividend_yield")
+                    dy_val = float(dy) if dy else None   # 存 FinMind 原始百分數,/100 留到組裝後
+                    rows.append((r["date"], p_val, dy_val))
+                return rows
+
+            per_rows, _ = _sync_and_assemble(
+                "per", CACHE_DIR, ticker, start, _fetch_per,
+                history_store.upsert_per, history_store.get_per,
+            )
+            per_rows = list(per_rows)
+            d.per_history = [(dt, p) for dt, p, dy in per_rows if p not in (None, 0)]
+            if per_rows:
+                last_dt, last_p, last_dy = per_rows[-1]
+                # 工單 014 reviewer 修正包 F3(P1-2b 護欄):PER 的「最新一筆」現在
+                # 來自 store 組裝(可能是先前某次增量留下的),不再保證跟這次的
+                # d.price_date 出自同一批 API 回應——兩者可能有時間落差(例如 PER
+                # 增量暫時落後價格增量,或剛切換 method 時 PER 還沒同步到位)。
+                # 014 之前 PER 跟價格永遠同一次呼叫抓回,天然不會有這個落差。
+                # 這裡用 10 天門檻模擬「同一批」的寬鬆容忍——超過就不派生
+                # d.per/d.trailing_eps/d.dividend_yield(三者維持 None),避免拿
+                # 過期的 PER 配上今天的股價算出誤導的隱含估值;`d.per_history`
+                # (河流圖用的歷史序列)不受此限制,仍是完整組裝後的歷史序列。
+                if d.price_date and _days_between(last_dt, d.price_date) <= 10:
+                    d.per = float(last_p) if last_p else None
+                    d.dividend_yield = float(last_dy) / 100.0 if last_dy else None
+                    if d.per and d.price:
+                        d.trailing_eps = round(d.price / d.per, 4)  # EPS = 股價 / 本益比
         except Exception:
             pass  # PER 拿不到不致命
     if method == "yield_band":
         try:
+            # 工單 014 reviewer 修正包 F4(P2-1/P2-2):配息刻意撤出增量路徑
+            # (不再呼叫 `_sync_and_assemble`),每次都全量抓(start=窗起點,
+            # 仍是 1 次 `_finmind` 呼叫,配息資料本來就稀疏、payload 很小,
+            # 增量在這裡沒有節流收益)。恢復成 014 之前的原始碼路徑——直接用
+            # 這次全量抓到的 raw 資料組裝 `d.div_history`,不經 store 讀取。
+            # 理由:
+            # (1) FinMind `TaiwanStockDividend` 的 `start_date` 篩的是「公告日」
+            #     欄位,不是 `CashExDividendTradingDate`(除息日)——兩者可能
+            #     相差數月甚至跨年。拿「上次看到的除息日」當增量游標送出去,
+            #     游標語意跟真正的篩選欄位對不上,可能漏抓「公告在游標之前、
+            #     但除息日還沒發生」的紀錄,或被未來 ex_date 卡住游標。
+            # (2) history_store 的 dividend 表 PK 是 (market,ticker,ex_date)——
+            #     若同一 ex_date 曾有多筆紀錄(真實資料可能發生),upsert 會讓
+            #     後寫入的覆蓋前面,把現狀的 SUM 語意破壞成 last-wins。
+            # 兩者相加,對配息做增量是「零收益、有風險」。
             div = _finmind("TaiwanStockDividend", ticker, start, token)
             hist = []
             for r in div:
@@ -303,9 +444,18 @@ def fetch_tw(ticker: str, name: str, years: int, token: str = "", method: str = 
                 if ex and cash:
                     hist.append((ex, float(cash)))
             d.div_history = sorted(hist)
+            # `history_store.upsert_dividend` 仍保留呼叫,純粹當 best-effort 耐久
+            # 備份(供未來工單使用,例如 015 缺日偵測);**不參與**這次的組裝,
+            # 寫入失敗也不影響 `d.div_history`/`d.annual_dividend`。
+            history_store.upsert_dividend(CACHE_DIR, "TW", ticker, hist)
         except Exception:
             pass
-    # 還原分割(總是執行,即使無配息也要修正分割股的價格序列)
+    # 還原分割(總是執行,即使無配息也要修正分割股的價格序列)。工單 014:
+    # price_history 是「store 組裝 + 記憶體合併後的完整序列」(可能橫跨多次
+    # 增量抓取拼接而成,F1 保證即使 store 寫入失敗也不影響這裡拿到的內容),
+    # div_history 是這次全量抓到的原始序列(F4,配息不做增量)。還原必須在
+    # 兩者都到齊的這一步對完整序列做一次,不能拆到各次增量各自局部處理——
+    # 見 `_sync_and_assemble` docstring 與工單 014 SPEC D2 point 4。
     d.price_history, d.div_history = _back_adjust_tw(d.price_history, d.div_history)
     if d.price_history:
         d.price = d.price_history[-1][1]
@@ -364,6 +514,9 @@ def fetch_us_finnhub(ticker: str, name: str, years: int, key: str) -> StockData:
         hist = t.history(period=f"{max(years,1)}y", auto_adjust=True)
         if hist is not None and len(hist):
             d.price_history = [(i.strftime("%Y-%m-%d"), float(c)) for i, c in zip(hist.index, hist["Close"])]
+            # 工單 014 D3:美股全量快照(DELETE+INSERT,best-effort,不影響回傳值)。
+            # 禁止用增量——理由見 history_store.replace_us_snapshot docstring。
+            history_store.replace_us_snapshot(CACHE_DIR, d.market, ticker, d.price_history)
         info = {}
         try:
             info = t.info or {}
@@ -403,6 +556,13 @@ def fetch_us(ticker: str, name: str, years: int) -> StockData:
                                for idx, c in zip(hist.index, hist["Close"])]
             d.price = d.price_history[-1][1]
             d.price_date = d.price_history[-1][0]
+            # 工單 014 D3:美股/INTL 全量快照(DELETE+INSERT 同一交易,best-effort,
+            # 不影響回傳值;讀路徑完全不改)。**禁止在此改用增量**——yfinance
+            # auto_adjust=True 會隨後續拆股/配息事件回溯改寫已發生日期的收盤價,
+            # 增量拼接會讓序列前後尺度不一致;INTL 的 ROI total-return 語意(股利
+            # 視為 0、報酬全反映在股價)也依賴單一連續 auto_adjust 序列。詳見
+            # history_store.replace_us_snapshot docstring。
+            history_store.replace_us_snapshot(CACHE_DIR, d.market, ticker, d.price_history)
         # 基本面 (info 可能慢/不穩,包起來)
         info = {}
         try:
