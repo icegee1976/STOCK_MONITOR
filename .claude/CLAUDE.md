@@ -8,19 +8,20 @@ Python **Streamlit + CLI** 的美股/台股 AI＋太空 成長股/ETF **價格�
 - Python 3.11+;deps:`streamlit>=1.49`、`plotly`、`pandas`、`PyYAML`、`yfinance`(+ 選用 `rich`、`win10toast`/`plyer`)。
 - 兩入口共用 `aimonitor/` 引擎:CLI `monitor.py`(report/screen/roi/watch/bands)、Dashboard `app.py`(`streamlit run`)。
 - 資料源:台股 **FinMind**(免金鑰,300/hr,`FINMIND_TOKEN`→600)、美股 **yfinance**(雲端易 429)→ **Finnhub** 備援(`FINNHUB_API_KEY`,60/min,只有報價無歷史)。
-- 引擎:`aimonitor/{providers,valuation,classify,roi,screener,report}.py`。~2,270 行、11 個 py(不含 tests/ 五檔 ~1,310 行);`app.py` 最大(727 行)。
+- 引擎:`aimonitor/{providers,valuation,classify,roi,screener,report,history_store}.py`。~3,340 行、12 個 py(不含 tests/ 十檔 ~4,500 行);`providers.py` 最大(含 EOD 快取/歷史庫接線/TWSE 備援)。
 
 ## 指令
 - CLI:`python monitor.py report --ticker 2330` / `screen` / `roi NVDA 300000`
 - Dashboard:`streamlit run app.py`(或 `run_dashboard.bat`,localhost:8501)
-- **測試 gate**:`python -m unittest discover -s tests`(71 題,**完全離線 0 API**,秒級)
+- **測試 gate**:`python -m unittest discover -s tests`(210 題,**完全離線 0 API**,秒級)
 - **語法 gate**:`python -m py_compile <改到的檔>`
 
 ## 測試現況
-**tests/ 離線套件 71 題**(2026-07,工單 001–005/007;stdlib unittest,零依賴、拔網路可跑):
+**tests/ 離線套件 210 題**(2026-08,工單 001–017;stdlib unittest,零依賴、拔網路可跑):
 黃金值 regression(台積電 anchor 135.147 / 便宜 2228.57 / 大特 1731.23 精確鎖定,對照 PDF ≈2,226/≈1,729)、
 ROI 稅費(證交稅/手續費/美股股利預扣 30%/跨幣別)、分類邊界、GBM/√252、拆股還原、
-資料源降級鏈(快取/Finnhub→yfinance/過期快取保命/FinMind 呼叫數)。收斂 gate:
+資料源降級鏈(快取/Finnhub→yfinance/過期快取保命/FinMind 呼叫數)、台股 EOD-aware 快取、
+本地 sqlite 歷史庫與增量(跨增量拆股)、缺日/品質警告、TWSE/TPEx 備援(不寫 blob/尺度護欄/負向 memo)。收斂 gate:
 1. **測試**:`python -m unittest discover -s tests` 全綠(黃金值已自動化,不再耗 API)。
 2. **語法**:`python -m py_compile` 改到的檔零錯誤。
 3. **數值正確**(命脈):改估價 / 分類 / ROI 仍須人工比對一次 CLI 黃金值交叉確認。

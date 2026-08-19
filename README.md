@@ -58,7 +58,7 @@ pip install streamlit plotly pandas
 streamlit run app.py
 ```
 
-四個分頁：**📊 總覽**（全清單顏色表）、**🔍 個股河流圖**（歷史股價＋五價格帶填色＋現價標記）、**💰 投報率試算**（情境年化報酬長條圖）、**🟢 便宜清單**（依需跌幅排序，便宜者自動展開）。與 CLI 共用同一套 `aimonitor` 引擎。
+七個分頁：**📊 總覽**（全清單顏色表）、**🏛️ AI 金字塔**（產業分層）、**🔍 個股河流圖**（歷史股價＋五價格帶填色＋現價標記）、**💰 投報率試算**（情境年化報酬長條圖）、**🟢 便宜清單**（依需跌幅排序）、**📐 資產配置試算**、**➕ 自訂清單**。與 CLI 共用同一套 `aimonitor` 引擎。
 
 ### 報表怎麼讀（以台積電為例）
 
@@ -186,8 +186,10 @@ STOCK_MONITOR/
 │  ├─ classify.py        # 價位分類、缺口、觸及機率
 │  ├─ roi.py             # 情境投報率（含稅費/匯率/股利，美股股利預扣 30%）
 │  ├─ screener.py        # 便宜標的篩選
+│  ├─ history_store.py   # 本地 sqlite 歷史庫（台股增量、美股快照）
 │  └─ report.py          # 終端報表（rich／純文字）
-├─ tests/                # 離線測試套件（71 題，0 API：黃金值/ROI/分類/拆股/降級鏈）
+├─ tests/                # 離線測試套件（210 題，0 API：黃金值/ROI/分類/拆股/
+│                        #   降級鏈/EOD 快取/歷史庫/品質警告/TWSE 備援）
 │                        #   跑法：python -m unittest discover -s tests
 ├─ docs/                 # api-budget.md（API 額度總帳）+ tickets/（工單紀錄）
 └─ AI_Investment_Blueprint.pdf   # 來源簡報
