@@ -11,6 +11,17 @@ mock 紀律:沿用工單 005(`tests/test_providers_fallback.py`)訂下的規範�
 見 REPORT)。
 
 每個測試類別開頭都寫「鎖什麼、什麼突變會翻紅」,呼應本專案既有測試檔慣例。
+
+**慣例(工單 020,防再犯)**:本檔大量測試驅動 `fetch_tw` 的 `requested_start`
+(`now() - (years*365.25+10)天`,見 `_window_start` helper)這個會隨真實日期
+每天滑動的窗起點。任何 fixture 日期字串只要會被拿去跟這個窗(或其他任何
+`datetime.now()`/`_now_tpe()` 派生值)比較大小、或會被 store 的 `start_date`
+過濾條件篩選,就**不可以寫死絕對日期**——寫下當天測試會過,但終將在未來某個
+可算出的日期翻紅(工單 020 就是這類「日期炸彈」被引爆的事後修復)。正確作法
+二選一:(1) 用相對日期,如 `(datetime.now() - timedelta(days=N)).strftime(...)`;
+(2) 該函數/路徑本身支援注入時鐘時,優先用 `patch.object(providers, "_now_tpe",
+return_value=fake_now)` 把時間完全釘死(決定性最好,見 `tests/test_eod_cache.py`
+`tests/test_twse_fallback.py` 的既有慣例)。新增測試前請自我檢查這一點。
 """
 
 from __future__ import annotations
@@ -509,14 +520,25 @@ class SplitAcrossIncrementsTest(_HistoryStoreIntegrationTestCase):
     存進 store、且未被納入這次 `_back_adjust_tw` 輸入的那兩筆——兩種情境算
     出來的序列會不同,`test_two_increments_matches_one_shot_full_fetch` 的逐值
     比較會抓到(REPORT 有實際 mutation 重演輸出)。
+
+    工單 020:`FULL_RAW` 改在 `setUp` 相對「現在」動態生成(不再是類別屬性寫死
+    絕對日期)——`fetch_tw` 的窗起點 `requested_start` 是 `now()` 每天往前滑動
+    的相對值,寫死的舊絕對日期遲早會被滑出窗外,讓「store 讀回」與「這次剛抓到
+    的 raw_rows」在窗邊界兩側產生不對稱(這正是工單 020 的根因,見該工單
+    REPORT)。相對日期(now-20..now-17)永遠深居 years>=1 的任何窗內,不受執行
+    當下的真實日期影響。
     """
 
-    FULL_RAW = [
-        ("2021-08-09", 400.0),
-        ("2021-08-10", 404.0),
-        ("2021-08-11", 100.5),   # 分割日:r = 100.5/404.0 ≈ 0.2488 < 0.6 → 觸發還原
-        ("2021-08-12", 101.0),
-    ]
+    def setUp(self):
+        super().setUp()
+        base = datetime.now() - timedelta(days=20)
+        d0, d1, d2, d3 = ((base + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(4))
+        self.FULL_RAW = [
+            (d0, 400.0),
+            (d1, 404.0),
+            (d2, 100.5),   # 分割日:r = 100.5/404.0 ≈ 0.2488 < 0.6 → 觸發還原
+            (d3, 101.0),
+        ]
 
     def _run_one_shot(self):
         tmpdir = tempfile.mkdtemp(prefix="aimonitor_test_history_store_oneshot_")
@@ -578,15 +600,22 @@ class ExDividendAcrossPriceIncrementsWithAlwaysFullDividendTest(_HistoryStoreInt
     `SplitAcrossIncrementsTest`(跳空發生在批次邊界、需要回頭修正前一批已存的
     資料)。這裡驗證的是另一個獨立面向:price 走增量、dividend 走恆全量,兩種
     節奏搭配時 ex_date 排除邏輯依然正確。
+
+    工單 020:`FULL_RAW`/`DIV` 改在 `setUp` 相對「現在」動態生成,理由同
+    `SplitAcrossIncrementsTest`(見該類別 docstring 的根因說明)。
     """
 
-    FULL_RAW = [
-        ("2021-08-09", 400.0),
-        ("2021-08-10", 404.0),
-        ("2021-08-11", 200.0),   # 跳空:r=200/404≈0.495<0.6,若非除息會誤判為分割
-        ("2021-08-12", 202.0),
-    ]
-    DIV = [("2021-08-11", 5.0)]  # 跳空當日除息 → 不應觸發分割還原
+    def setUp(self):
+        super().setUp()
+        base = datetime.now() - timedelta(days=20)
+        d0, d1, d2, d3 = ((base + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(4))
+        self.FULL_RAW = [
+            (d0, 400.0),
+            (d1, 404.0),
+            (d2, 200.0),   # 跳空:r=200/404≈0.495<0.6,若非除息會誤判為分割
+            (d3, 202.0),
+        ]
+        self.DIV = [(d2, 5.0)]  # 跳空當日除息 → 不應觸發分割還原
 
     def _price_router(self, rows):
         def _h(url):
@@ -1082,12 +1111,20 @@ class WindowSlicingTest(_HistoryStoreIntegrationTestCase):
     只要求較淺的窗口 → 組裝回傳的序列起點必須正確落在要求窗內,不能把 store
     裡更早的資料也混進來;但 store 本身仍完整保留那筆更早資料(切片只影響
     「這次回傳給呼叫端」的組裝結果)。
+
+    工單 020:`in_window_date` 改為相對「現在」動態生成(不再寫死
+    "2021-08-10")——這裡的斷言直接拿 `in_window_date` 與動態算出的
+    `window_start_5y` 比較(`all(d >= window_start_5y ...)`),寫死的絕對日期
+    一旦被真實日期滑動的窗起點追上/超過就會翻紅(工單 020 根因同款;`in_window_date`
+    當時剛好落在窗邊界上,次日即引爆,見工單 020 REPORT)。`very_old_date` 維持
+    寫死("2010-01-01")不受影響——窗起點只會隨時間單調前移,一旦排除在窗外就
+    永遠排除,不會反向「追不上」而重新落入窗內。
     """
 
     def test_shallower_request_slices_to_requested_window_not_full_store_depth(self):
         window_start_5y = _window_start(5)
         very_old_date = "2010-01-01"
-        in_window_date = "2021-08-10"
+        in_window_date = (datetime.now() - timedelta(days=20)).strftime("%Y-%m-%d")
         # 直接預先灌入 store(模擬先前抓過更長歷史),並把 meta.requested_start
         # 設成比這次 5 年窗更早 → 這次呼叫應該走「增量」分支(窗沒有變深)。
         history_store.upsert_price(self._tmpdir, "TW", "2330",

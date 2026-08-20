@@ -683,9 +683,18 @@ class FinMindHealthyNoFallbackCallsTest(TwFallbackTestCase):
 # =========================================================================== #
 class HistoryStoreAssemblyAndClassifyWiringTest(TwFallbackTestCase):
     def test_history_store_has_data_gets_assembled_into_fallback_result(self):
+        # 工單 020:store 內的日期改為相對「現在」動態生成(不寫死絕對日期)。
+        # `_assemble_tw_fallback` 讀 store 時會用 `fetch_tw` 的 years 窗過濾
+        # (`start_date=requested_start`),寫死的舊絕對日期遲早會被真實日期
+        # 往前滑動的窗起點排除在外(見工單 020 REPORT 判定表);這裡只驗證
+        # store 組裝接線本身,日期值與 roc_date/`d.price_date` 無關聯,可安全
+        # 改成相對日期。
+        d0 = (datetime.now() - timedelta(days=20)).strftime("%Y-%m-%d")
+        d1 = (datetime.now() - timedelta(days=19)).strftime("%Y-%m-%d")
+        div_date = (datetime.now() - timedelta(days=50)).strftime("%Y-%m-%d")
         history_store.upsert_price(self._tmpdir, "TW", "2330",
-                                    [("2026-08-10", 1050.0), ("2026-08-11", 1060.0)])
-        history_store.upsert_dividend(self._tmpdir, "TW", "2330", [("2026-07-01", 3.0)])
+                                    [(d0, 1050.0), (d1, 1060.0)])
+        history_store.upsert_dividend(self._tmpdir, "TW", "2330", [(div_date, 3.0)])
 
         def _finmind_fail(url):
             raise RuntimeError("FinMind down (fake)")
@@ -705,8 +714,8 @@ class HistoryStoreAssemblyAndClassifyWiringTest(TwFallbackTestCase):
         self.assertEqual(result.source, "TWSE(備援)")
         self.assertEqual(result.price, 1088.0)   # 官方 EOD,不被 store 內的舊資料覆蓋
         dates = [d for d, _ in result.price_history]
-        self.assertIn("2026-08-10", dates)
-        self.assertIn("2026-08-11", dates)
+        self.assertIn(d0, dates)
+        self.assertIn(d1, dates)
         self.assertTrue(any(c == 3.0 for _, c in result.div_history))
 
     def test_no_history_store_data_empty_price_history_but_fixed_band_classify_still_works(self):
@@ -750,10 +759,14 @@ class ScaleGuardTest(TwFallbackTestCase):
     """鎖:P1-2 真實重現(price/歷史尺度脫鉤→假 is_buy+桌面通知)的根本修正——
     官方現價與組裝出的歷史序列尾端比值異常時,整組捨棄三個歷史序列並告知,
     寧可讓 auto 類估價誠實報 ValuationError,也不要用錯尺度的歷史算出假訊號。
-    門檻 0.6/1.7 與 `_back_adjust_tw` 判斷真正拆股的門檻同款(見該函式)。"""
+    門檻 0.6/1.7 與 `_back_adjust_tw` 判斷真正拆股的門檻同款(見該函式)。
+
+    工單 020:兩個 store 種子日期改為相對「現在」動態生成,理由同
+    `HistoryStoreAssemblyAndClassifyWiringTest`(見上方說明)。"""
 
     def test_ratio_025_below_threshold_discards_all_three_series_with_warning(self):
-        history_store.upsert_price(self._tmpdir, "TW", "2330", [("2026-08-10", 4000.0)])
+        seed_date = (datetime.now() - timedelta(days=20)).strftime("%Y-%m-%d")
+        history_store.upsert_price(self._tmpdir, "TW", "2330", [(seed_date, 4000.0)])
 
         def _finmind_fail(url):
             raise RuntimeError("down (fake)")
@@ -778,7 +791,8 @@ class ScaleGuardTest(TwFallbackTestCase):
         self.assertTrue(any("拆股" in w for w in result.quality_warnings))
 
     def test_ratio_1_0_within_threshold_keeps_history(self):
-        history_store.upsert_price(self._tmpdir, "TW", "2330", [("2026-08-10", 1000.0)])
+        seed_date = (datetime.now() - timedelta(days=20)).strftime("%Y-%m-%d")
+        history_store.upsert_price(self._tmpdir, "TW", "2330", [(seed_date, 1000.0)])
 
         def _finmind_fail(url):
             raise RuntimeError("down (fake)")
@@ -795,7 +809,7 @@ class ScaleGuardTest(TwFallbackTestCase):
             result = providers.fetch_tw("2330", "台積電", years=5, token="", method="")
 
         self.assertTrue(result.ok())
-        self.assertEqual(result.price_history, [("2026-08-10", 1000.0)])
+        self.assertEqual(result.price_history, [(seed_date, 1000.0)])
         self.assertFalse(any("跳動異常" in w for w in result.quality_warnings))
 
 
@@ -941,10 +955,17 @@ class DerivedFieldsAndG1FallbackTest(TwFallbackTestCase):
         self.assertEqual(result.trailing_eps, round(1000.0 / 20.0, 4))
 
     def test_annual_dividend_ttm_cutoff_only_sums_within_365_days(self):
-        history_store.upsert_price(self._tmpdir, "TW", "2330", [("2026-08-15", 1000.0)])
+        # 工單 020:三個種子日期改為相對「現在」動態生成——原本寫死的
+        # "2026-01-01"/"2020-01-01" 除了受 5 年窗過濾影響外,更早在 365 天 TTM
+        # cutoff(同樣是 `datetime.now()` 相對算式)這關就會先翻紅(引爆日遠比
+        # 5 年窗更早,見工單 020 REPORT 判定表),兩個風險一併用相對日期消除。
+        price_date = (datetime.now() - timedelta(days=20)).strftime("%Y-%m-%d")
+        history_store.upsert_price(self._tmpdir, "TW", "2330", [(price_date, 1000.0)])
+        recent_ex_date = (datetime.now() - timedelta(days=200)).strftime("%Y-%m-%d")
+        old_ex_date = (datetime.now() - timedelta(days=800)).strftime("%Y-%m-%d")
         history_store.upsert_dividend(self._tmpdir, "TW", "2330", [
-            ("2026-01-01", 5.0),     # 在 365 天窗內(今天約 2026-08 附近)
-            ("2020-01-01", 999.0),   # 遠超窗外,不該被計入
+            (recent_ex_date, 5.0),    # 在 365 天窗內
+            (old_ex_date, 999.0),     # 遠超窗外,不該被計入
         ])
 
         with patch.object(providers, "_http_get_json",
@@ -956,10 +977,13 @@ class DerivedFieldsAndG1FallbackTest(TwFallbackTestCase):
 
     def test_store_path_runs_back_adjust_tw_for_synthetic_split(self):
         # 模擬股價在某天發生 1:4 分割(r=1000/4000=0.25<0.6,觸發 _back_adjust_tw
-        # 的整數倍拆股判斷)。
+        # 的整數倍拆股判斷)。工單 020:種子日期改為相對「現在」動態生成(理由
+        # 同上方 ScaleGuardTest)。
+        d0 = (datetime.now() - timedelta(days=20)).strftime("%Y-%m-%d")
+        d1 = (datetime.now() - timedelta(days=19)).strftime("%Y-%m-%d")
         history_store.upsert_price(self._tmpdir, "TW", "2330", [
-            ("2026-08-10", 4000.0),
-            ("2026-08-11", 1000.0),
+            (d0, 4000.0),
+            (d1, 1000.0),
         ])
 
         with patch.object(providers, "_http_get_json",
@@ -969,8 +993,8 @@ class DerivedFieldsAndG1FallbackTest(TwFallbackTestCase):
         self.assertTrue(result.ok())
         hist = dict(result.price_history)
         # 分割前那筆應該被還原乘上 0.25 的還原因子:4000*0.25=1000。
-        self.assertAlmostEqual(hist["2026-08-10"], 1000.0)
-        self.assertAlmostEqual(hist["2026-08-11"], 1000.0)
+        self.assertAlmostEqual(hist[d0], 1000.0)
+        self.assertAlmostEqual(hist[d1], 1000.0)
         # 還原後現價(1010)與序列尾端(1000)比值≈1.01,不會被 G2 護欄誤判丟棄。
         self.assertNotEqual(result.price_history, [])
 
