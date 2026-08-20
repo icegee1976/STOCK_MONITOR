@@ -89,6 +89,153 @@ def _forward_eps(val_cfg: dict) -> tuple[float, int, str]:
     raise ValuationError("pe_band 需要 forward_eps 或 derive 區塊")
 
 
+# --------------------------------------------------------------------------- #
+#  月營收假設護欄(工單 018)—— 純附加,不觸碰上面 _forward_eps / 下面
+#  compute_zones 的 zones 計算路徑。資料來源見 aimonitor/providers.py
+#  fetch_month_revenue;呼叫端見 compute_zones 的 pe_band 分支尾端。
+# --------------------------------------------------------------------------- #
+def _month_key(mstr: str) -> tuple[int, int]:
+    y, m = mstr.split("-")
+    return int(y), int(m)
+
+
+def _month_index(mstr: str) -> int:
+    """"YYYY-MM" → 絕對月索引(year*12+month),供窗口連續性檢查用簡單整數相減。"""
+    y, m = _month_key(mstr)
+    return y * 12 + m
+
+
+def _is_consecutive_window(rows, n: int) -> bool:
+    """工單 018 修正包 H2:檢查 `rows`(已去重、依月份升冪排序)的最後 n 筆
+    是否為「連續 n 個日曆月」——頭尾月份索引差必須恰為 `n-1`。因為 `rows` 本身
+    已去重(同月最多一筆)且已排序,n 筆之間若真的每月遞增 1,頭尾差必為
+    `n-1`;反之若中間缺月,頭尾差會大於 `n-1`(缺月造成的間隔會累加進頭尾差),
+    所以只檢查頭尾差即可判定中間有無缺月,不需逐筆比對相鄰差值。"""
+    if len(rows) < n:
+        return False
+    window = rows[-n:]
+    return _month_index(window[-1][0]) - _month_index(window[0][0]) == n - 1
+
+
+def _compute_revenue_check(month_revenue, derive: dict) -> dict | None:
+    """比較「近 12 月實際營收」與 derive 假設推導的軌跡(A 法,有 -15% 門檻)、
+    以及「TTM YoY」與假設 CAGR(B 法,純資訊,需 24 個月)。純函數。
+
+    A 法:
+        TTM_actual   = 近 12 個月營收合計(且這 12 個月必須是連續日曆月,見下方
+        H2 連續性護欄——中間缺月的話,「合計」跟「TTM(trailing twelve months)」
+        的語意就對不上了,寧可整組回 None 也不要算出一個貌似合理實則偏差的數字)。
+        expected_ttm = base_revenue × (1+cagr)^years_frac
+        years_frac   = ((ttm_end_year-base_year)*12 + (ttm_end_month-12)) / 12
+
+        —— 推導(工單 018 修正包 H1,根修 P1-1 數學錯誤):`base_revenue` 是
+        base_year **全年 12 個月合計**,`TTM_actual` 也是「近 12 個月合計」——
+        兩者都是「12 個月的和」,比較兩個等長窗口的和,只需要比較兩個窗口的
+        任一相同基準點(例如都取窗口的終點),偏移量會自動抵消,**不需要**
+        (也不能)額外引入「base_year 年中」這種只錨定其中一邊窗口的中點
+        概念——那樣等於拿「TTM 窗口的終點」去對「base_year 窗口的中點」,
+        兩個窗口的參照基準不一致,系統性多算了半年(舊版 `-6` 的錯誤:只把
+        base 那一側錨到年中,TTM 那一側卻仍用終點,兩側基準不對稱)。正確
+        做法是兩側都用「窗口終點」比:base_year 窗口的終點是 base_year 的
+        12 月,所以是 `ttm_end - base_year_12月`,即 `(ttm_end_year-base_year)*12
+        + (ttm_end_month-12)`。
+        **自恰檢查**(可直接驗證這個公式的必要條件):若 TTM 窗口恰好等於
+        base_year 整個日曆年(即 ttm_end_year=base_year 且 ttm_end_month=12,
+        TTM_actual 加總的 12 個月跟 base_revenue 加總的 12 個月是同一組月份)
+        → months_elapsed=0 → years_frac=0 → expected_ttm=base_revenue×(1+cagr)^0
+        =base_revenue(原封不動)→ dev_pct 必為 0(因為兩邊本來就是同一件事的
+        兩種計算路徑,理應完全相等)。例:base_year=2024、TTM 終月=2025-12 →
+        months=(2025-2024)*12+(12-12)=12 → years_frac=1.0(整整一年後);
+        TTM 終月=2024-06 → months=(2024-2024)*12+(6-12)=-6 → years_frac=-0.5
+        (在 base_year 12 月「之前」半年,允許負值,語意上代表 TTM 窗口早於
+        base_year 的參照終點)。
+        dev_pct = (TTM_actual/expected_ttm − 1) × 100,呼叫端只在 dev_pct<-15
+        時才附加警告(見 compute_zones)。
+    B 法(純資訊,不設門檻):
+        TTM YoY = 近12月合計 / 前12月合計 − 1,需要 24 個月資料,且「前12月」
+        這個窗口本身也必須是連續日曆月(H2,同一套 `_is_consecutive_window`
+        檢查邏輯,理由同 A 法——「前12月合計」若中間缺月,YoY 比較就不是真的
+        年增率);不足 24 個月或前 12 月缺月時 yoy_pct=None,但 A 法只要 ≥12
+        個月且該窗連續就照算,兩者資料需求與連續性各自獨立判斷。
+
+    回傳 None:去重後 <12 個月,或近 12 個月窗口本身有缺月(呼叫端
+    compute_zones 已先擋過資料量這一關,這裡防禦性再檢一次,供直接單元測試
+    這個函數時也有一致行為)。否則回傳 dict:
+    `ttm`/`expected`/`dev_pct`/`yoy_pct`(可能 None)/`cagr_pct`。
+    """
+    rows = sorted({m: r for m, r in month_revenue}.items())
+    if len(rows) < 12:
+        return None
+    if not _is_consecutive_window(rows, 12):
+        return None
+    base_revenue = float(derive["base_revenue"])
+    cagr = float(derive["revenue_cagr"])
+    base_year = int(derive.get("base_year", 2024))
+
+    last12 = rows[-12:]
+    ttm_actual = sum(r for _, r in last12)
+    ttm_end_year, ttm_end_month = _month_key(last12[-1][0])
+
+    months_elapsed = (ttm_end_year - base_year) * 12 + (ttm_end_month - 12)
+    years_frac = months_elapsed / 12.0
+    expected_ttm = base_revenue * ((1 + cagr) ** years_frac)
+    dev_pct = round((ttm_actual / expected_ttm - 1) * 100, 2) if expected_ttm else None
+
+    yoy_pct = None
+    if len(rows) >= 24:
+        prior12 = rows[-24:-12]
+        # H2:prior12 自己也要是連續 12 個月(用同一個 `_is_consecutive_window`,
+        # 對 prior12 這個獨立 12 元素 list 本身檢查頭尾月份差)——刻意**不**額外
+        # 要求 prior12 跟 last12 之間零縫隙相接(那是更嚴格、SPEC 未要求的條件);
+        # 「近12月 vs 前12月」兩個窗口各自是合法的連續 TTM 即可,兩窗口之間本身
+        # 有沒有縫隙不影響 YoY 比較的語意(兩者都還是各自窗口的合法 TTM 合計)。
+        if _is_consecutive_window(prior12, 12):
+            ttm_prior = sum(r for _, r in prior12)
+            if ttm_prior:
+                yoy_pct = round((ttm_actual / ttm_prior - 1) * 100, 2)
+
+    return {
+        "ttm": round(ttm_actual, 2),
+        "expected": round(expected_ttm, 2),
+        "dev_pct": dev_pct,
+        "yoy_pct": yoy_pct,
+        "cagr_pct": round(cagr * 100, 2),
+    }
+
+
+def _fmt_ntd(x) -> str:
+    """新台幣金額人類可讀量級(兆/億/萬),供月營收護欄顯示(工單 018)。"""
+    if x is None:
+        return "—"
+    ax = abs(x)
+    if ax >= 1e12:
+        return f"{x/1e12:.2f}兆"
+    if ax >= 1e8:
+        return f"{x/1e8:.1f}億"
+    if ax >= 1e4:
+        return f"{x/1e4:.1f}萬"
+    return f"{x:,.0f}"
+
+
+def format_revenue_check_line(rc: dict | None) -> str:
+    """把 `revenue_check` 結果(見 `_compute_revenue_check`)組成一行 A+B 並示
+    文字,CLI(report.py)與 dashboard(app.py)共用同一份措辭,避免各自造字
+    分岔。`rc` 為 None(月營收 <12 個月/未抓到)時回傳空字串,呼叫端應先判斷
+    `if revenue_check:` 再顯示整行(比照既有 assumptions/anchor 顯示慣例)。
+    """
+    if not rc:
+        return ""
+    a = f"TTM {_fmt_ntd(rc.get('ttm'))} vs 假設 {_fmt_ntd(rc.get('expected'))}"
+    if rc.get("dev_pct") is not None:
+        a += f"({rc['dev_pct']:+.1f}%)"
+    cagr_txt = f"{rc['cagr_pct']:.1f}%" if rc.get("cagr_pct") is not None else "—"
+    if rc.get("yoy_pct") is not None:
+        b = f"YoY {rc['yoy_pct']:+.1f}% vs 假設 CAGR {cagr_txt}"
+    else:
+        b = f"YoY 資料不足(需24個月);假設 CAGR {cagr_txt}"
+    return f"{a};{b}"
+
+
 def compute_zones(stock_cfg: dict, data, config: dict) -> dict:
     """回傳 {zones, method, anchor(EPS/SPS), target_year, assumptions, warnings}。"""
     val = stock_cfg.get("valuation", {})
@@ -97,7 +244,8 @@ def compute_zones(stock_cfg: dict, data, config: dict) -> dict:
         "super_bargain": 10, "cheap": 25, "fair": 50, "expensive": 75, "euphoria": 90})
     warnings = []
     result = {"method": method, "target_year": None, "anchor": None,
-              "anchor_kind": None, "assumptions": "", "warnings": warnings}
+              "anchor_kind": None, "assumptions": "", "warnings": warnings,
+              "revenue_check": None}  # 018:預設 None,只有 pe_band+derive+月營收足夠時才覆寫
 
     if method == "pe_band":
         eps, ty, expl = _forward_eps(val)
@@ -121,6 +269,34 @@ def compute_zones(stock_cfg: dict, data, config: dict) -> dict:
                 f"現價隱含 forward P/E≈{implied_pe:.0f},高於你瘋狂價本益比"
                 f"{float(bands['euphoria']):.0f};forward_EPS({eps:.1f}) 可能過低或過時,請校正"
                 + (f"(目前 trailing EPS≈{data.trailing_eps})" if data.trailing_eps else ""))
+
+        # 工單 018:月營收假設護欄(A+B 並示;A 設 -15% 門檻,B 純資訊)。刻意
+        # 放在 zones/anchor/assumptions 都已經 result.update 完成之後才附加
+        # 計算——不改動上面任何一行既有計算路徑,只讀 data.month_revenue
+        # (getattr 防禦,不存在時視為空列表——tests/test_golden_valuation.py
+        # 的 stub data 沒有這個屬性,藉此保證黃金值測試不受影響)。只有
+        # derive(需要 base_revenue/CAGR 才有東西可比較)且月營收 ≥12 個月時
+        # 才計算;forward_eps 直填或月營收不足一律維持 None,不產生警告(見
+        # aimonitor/providers.py fetch_month_revenue 的靜默失敗設計)。
+        # 修正包 H4(P3-3):額外加 market==TW 護欄——FinMind 月營收的抓取範圍
+        # 本就限 TW+derive(見 providers._needs_month_revenue),這裡再獨立判斷
+        # 一次是防禦性寫法:即使未來有人在美股 cfg 上意外塞了 derive 區塊、或
+        # 手動組出帶 month_revenue 的 data(例如測試/未來新資料源),也不會誤用
+        # 新台幣「元」單位的月營收數字去跟美股假設做比較(單位/幣別都對不上,
+        # 算出來的 dev_pct 會是毫無意義的數字)。
+        is_tw = str(stock_cfg.get("market", "")).upper() == "TW"
+        d_cfg = val.get("derive")
+        month_rev = getattr(data, "month_revenue", None) or []
+        if is_tw and d_cfg and len(month_rev) >= 12:
+            try:
+                rc = _compute_revenue_check(month_rev, d_cfg)
+            except Exception:
+                rc = None
+            result["revenue_check"] = rc
+            if rc and rc.get("dev_pct") is not None and rc["dev_pct"] < -15.0:
+                warnings.append(
+                    f"近 12 月實際營收較假設軌跡低 {abs(rc['dev_pct']):.1f}%;"
+                    "forward EPS 假設可能過高,便宜價可能因此偏高,請檢視 watchlist 假設。")
 
     elif method == "ps_band":
         rev = float(val["forward_revenue"])

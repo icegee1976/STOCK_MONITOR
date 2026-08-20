@@ -10,6 +10,7 @@ US 27:pe_band 16/ps_band 6/price_band 固定帶 5;INTL 5:price_band)。
 | 市場/方法 | FinMind | Finnhub(有金鑰) | Yahoo(yfinance) | 備註 |
 |---|---|---|---|---|
 | TW pe_band | 2(Price+PER) | — | — | PER 供河流圖/隱含PE |
+| **TW pe_band 且含 `derive`**(工單 018,現況僅 2330) | 2(Price+PER,monthrev 快取新鮮時)或 **3**(+MonthRevenue,獨立 7 天 TTL 快取 miss 時) | — | — | MonthRevenue 快取與主 blob(EOD-aware)脫鉤,7 天內同檔最多 1 次,不隨 report/screen/watch 輪數增加;非 derive 的 TW 標的(含其他 pe_band 檔)0 新增呼叫(見 `tests/test_month_revenue_guardrail.py::FetchWiringCallCountTest`)。**失敗模式 caveat(修正包 H5)**:`fetch_month_revenue` 抓取失敗時**不寫快取**(無負向快取/冷卻機制,不同於 TWSE/TPEx 備援的 15 分鐘負向 memo)——若 FinMind MonthRevenue 持續失敗,呼叫頻率會退化成跟著主 blob 的 EOD-aware 週期走(約每日 1 次,而非 7 天 1 次),且每次都含 `_retry` 三次重試;側邊欄「🔄 重新抓取(清快取)」的 `shutil.rmtree(.cache/)` 會連 `.cache/TW_<ticker>_monthrev.json` 一起刪除(該檔也在 `.cache/` 底下,無特殊豁免) |
 | TW price_band | 1(Price) | — | — | |
 | TW yield_band | 2(Price+Dividend) | — | — | |
 | US(有 FINNHUB_API_KEY) | — | 2(/quote+/metric) | ≤2(history+info,best-effort,失敗略過) | Finnhub 失敗→整檔退回 yfinance |
@@ -22,8 +23,8 @@ US 27:pe_band 16/ps_band 6/price_band 固定帶 5;INTL 5:price_band)。
 
 | 場景 | FinMind | Finnhub | Yahoo | 佔額度 |
 |---|---|---|---|---|
-| `report --ticker 2330`(單檔 pe_band) | 2 | 0 | 0 | 0.7% of 300/hr |
-| `report` / `screen` 全清單(57 檔) | **36**(cache miss 當次;§1 的每檔成本表,worst case) | 54 | ~64 | FinMind 12%/hr;**Finnhub 54 接近 60/min**(序列執行有自然間隔,實務約 30–60s 內發出,邊緣) |
+| `report --ticker 2330`(單檔 pe_band,含 `derive`) | 2(monthrev 快取新鮮)/**3**(工單 018,monthrev 快取也 miss;每 7 天最多 1 次) | 0 | 0 | 0.7-1.0% of 300/hr |
+| `report` / `screen` 全清單(57 檔) | **36**(blob cache miss 當次;§1 的每檔成本表,worst case)/**37**(工單 018:2330 的獨立 monthrev 快取「同時」也 miss,7 天週期內罕見同時發生,+1 次 MonthRevenue,現況僅 2330 這一檔會有此加成) | 54 | ~64 | FinMind 12%/hr;**Finnhub 54 接近 60/min**(序列執行有自然間隔,實務約 30–60s 內發出,邊緣) |
 | Dashboard 冷載入(總覽全清單) | 36(cache miss 當次) | 54 | ~64 | 同上;**happy path**(抓取成功、快取正常寫入)下 TW 之後在同一交易日內幾乎 0(EOD-aware,工單 013,見 §3),US/INTL 仍是 15 分鐘內幾乎 0。**失敗模式**:抓取失敗時 `_save_cache` 不寫入(見 providers.py `if data.ok(): _save_cache(...)`),下一輪仍是 cache miss、仍要打滿 36/54/~64——EOD-aware 只降低「成功後的重複讀取」,不改善「持續失敗時每輪都重抓」的情況 |
 | `roi <ticker> <amt>`(跨幣別) | 1–2 | 0–2 | 0–2 | +1 次匯率 |
 | **`watch --interval 300`(預設,已修工單 008;TW 已加碼工單 013)** | **happy path:TW ≈36/天**(EOD-aware,一天內跨過交易日邊界才重抓,與 interval 無關,工單 013)。**worst case(FinMind 402/斷線等持續失敗期間)**:失敗不寫快取 → 每輪仍是 36 FinMind(全清單),回到工單 008 修復前的量級,`--interval 300` 下仍是 **432/hr**,需仰賴 `_retry` 指數退避與過期快取保命撐過去,不是「怎樣都安全」。US/INTL 抓取量不算在此欄(FinMind 專用)。**工單 017 更新(reviewer 修正包 G1b 之後的真實模型)**:台股 TWSE/TPEx 備援結果**不寫入 blob**(G1b)——這代表 blob 的新鮮度只由「上一次 FinMind 真正成功」的時間戳決定,備援再怎麼成功也不會讓 blob 看起來新鮮。換言之:一旦既有 blob 跨過 EOD 邊界過期,**備援期間每一輪都會照常先打 FinMind 探測**(每檔 1 次,額度壓力與工單 008 之前描述的 worst case 相同,不會因為有備援就下降),FinMind 失敗才觸發備援;但**只要 FinMind 有一次恢復成功,那一輪就立刻寫回正常 blob、回到 happy path**,不會像「若備援結果寫 blob」那樣被 EOD 新鮮度誤判凍結在降級快照上長達 22~71 小時(這正是 G1a/G1b 修正的 P1-1 真實重現)。**每輪額外只加 TWSE+TPEx 最多各 1 次**(免金鑰、process memo 共用全清單,不隨檔數增加、也不隨輪數線性增加——只在跨過 EOD 邊界或負向 memo 冷卻期滿時才各重打 1 次,見上方 §1),換到大多數台股標的能顯示官方 EOD 現價與明確帶分類,而不是整輪只剩過期快取;**不改變 FinMind 額度本身的壓力**,是「多一條命 + 更快恢復正常路徑」,不是「省 FinMind 額度」 | 54/首輪,之後多輪共用(15分 TTL 不變) | ~64/首輪,之後多輪共用(15分 TTL 不變) | happy path 下 TW 額度需求遠低於工單 008 時代;持續失敗時退化回等量(FinMind 側),另加 TWSE/TPEx 極小額外呼叫(見上方 §1 備援列) |
@@ -217,3 +218,29 @@ US 27:pe_band 16/ps_band 6/price_band 固定帶 5;INTL 5:price_band)。
 > regression 全綠,新增 48 題於 `tests/test_twse_fallback.py`);黃金值再次交叉驗收
 > 2 次 FinMind(cache-miss 強制重抓),結果一致(便宜 2228.57 / 大特 1731.23 /
 > forward_EPS 135.147)。
+> **工單 018(2026-08)月營收假設護欄**:新增 FinMind `TaiwanStockMonthRevenue`,
+> 只給 `market==TW` 且 `valuation.derive` 存在的標的抓取(現況僅 2330 這一檔,見
+> `providers._needs_month_revenue`),獨立 JSON 快取(`.cache/TW_<ticker>_monthrev.json`,
+> TTL **7 天**,與工單 013 的 TW EOD-aware/天級 blob 快取脫鉤——monthrev 是月頻
+> 資料,不該跟著日頻的價格快取一起重打)。**呼叫數影響**:非 derive 的 TW 標的
+> (含其他 pe_band/price_band/yield_band 檔)與 US/INTL **0 新增呼叫**(見上方 §1
+> 新增列、§2 `report --ticker 2330` 列更新,並由
+> `tests/test_month_revenue_guardrail.py::FetchWiringCallCountTest` 鎖住:非
+> derive 標的的 mock 若收到 MonthRevenue 請求會直接斷言失敗)。唯一有加成的是
+> 2330(現況唯一的 TW derive 標的):blob 快取 miss 時原本 2 次(Price+PER)→
+> monthrev 快取「同時」也過期時額外 +1 次(3 次),7 天內同檔最多 1 次
+> MonthRevenue,不隨 report/screen/watch 的重跑次數線性增加。**一次性 schema
+> 確認呼叫**:SPEC 明文允許 1 次,executor 實際打了 **2 次**(第一次確認
+> status/欄位形狀,第二次為了完整看清楚 `date` 欄位與 `revenue_year`/
+> `revenue_month` 的月份對應關係——`date` 實測是「發布月」= 營收所屬月的次月,
+> 不能直接當月份用,這個細節須看較完整的序列才能確認,已於 REPORT 誠實記錄
+> 超過原定 1 次的用量;之後 `tests/test_month_revenue_guardrail.py` 67 題全部
+> 離線 mock,0 真實呼叫)。**黃金值交叉驗收**:清空本機 `.cache/TW_2330.json` +
+> `TW_2330_monthrev.json` 強制冷啟動,`python monitor.py report --ticker 2330`
+> 實際打了 3 次 FinMind(Price+PER+MonthRevenue),結果與改動前一致(便宜
+> 2228.57 / 大特 1731.23 / forward_EPS 135.147),新增顯示行「營收軌跡:TTM
+> 4.58兆 vs 假設 4.52兆(+1.4%);YoY +32.2% vs 假設 CAGR 24.0%」正確出現、無
+> -15% 警告(dev_pct=+1.35%,遠高於門檻,符合預期)。277 題(210 既有 + 67
+> 新增)離線 regression 全綠(既有 2 題 `test_history_store.py` 失敗為改動前
+> 既有、與本工單無關的 pre-existing 缺陷,已核實與本次 diff 無關,詳見
+> REPORT)。

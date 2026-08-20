@@ -42,6 +42,7 @@ class StockData:
     price_history: list = field(default_factory=list)   # [(date, close), ...] 舊→新
     per_history: list = field(default_factory=list)     # [(date, per), ...]
     per_history_approx: bool = False  # 美股的 PER 河流圖是近似(price/現EPS)
+    month_revenue: list = field(default_factory=list)  # 018:[(YYYY-MM, 營收), ...],僅 TW+derive 標的抓取
     quality_warnings: list = field(default_factory=list)  # 015:缺口/尾端過舊偵測告知
     source: str = ""
     error: str = ""
@@ -707,7 +708,131 @@ def _assemble_tw_fallback(ticker: str, name: str, price: float, price_date: str,
     return d
 
 
-def fetch_tw(ticker: str, name: str, years: int, token: str = "", method: str = "") -> StockData:
+# --------------------------------------------------------------------------- #
+#  台股月營收護欄(工單 018):FinMind TaiwanStockMonthRevenue,獨立輕量 JSON
+#  快取(TTL 7 天,月頻資料——不沿用工單 013 的 TW EOD-aware/天級規則),只給
+#  `fetch()` 判斷為 market==TW 且 `valuation.derive` 存在的標的抓取(現況約
+#  1-6 檔,見 docs/api-budget.md 呼叫評估);不動 history_store schema(migration
+#  政策屬工單 016,未定前不加表)。失敗一律靜默回空列表——估價鏈完全不受
+#  影響,只是少了這個護欄檢查(aimonitor/valuation.py compute_zones 對空/
+#  不足 12 個月一律回傳 revenue_check=None,不產生 error,不影響 zones)。
+#
+#  實測欄位(2026-08-20 真實 FinMind 呼叫,2330,見工單 018 REPORT):
+#    TaiwanStockMonthRevenue → list[dict],鍵 date("YYYY-MM-01",**注意**:這是
+#    「發布月」= 營收所屬月的次月,不是營收所屬月本身,不可直接當月份用)/
+#    stock_id/country/revenue(新台幣「元」原始數值,與 watchlist.yaml 的
+#    `derive.base_revenue` 同單位,可直接比較,不是千元)/revenue_month
+#    (1-12,營收「所屬」月)/revenue_year(營收「所屬」年)/create_time(發布
+#    時間,較早期資料可能是空字串)。真正的營收所屬月份必須用
+#    revenue_year+revenue_month 組回 "YYYY-MM",不能用 date 欄位——本節與
+#    離線測試皆以此為準。
+# --------------------------------------------------------------------------- #
+MONTHREV_CACHE_TTL_MINUTES = 7 * 24 * 60  # 7 天(月頻資料,約每月10日更新)
+MONTHREV_WINDOW_MONTHS = 30               # B 法 YoY 需 24 個月,30 留緩衝
+
+
+def _monthrev_cache_path(ticker: str) -> str:
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    safe = str(ticker).replace("/", "_")
+    return os.path.join(CACHE_DIR, f"TW_{safe}_monthrev.json")
+
+
+def _monthrev_start_date(now=None) -> str:
+    """近 `MONTHREV_WINDOW_MONTHS` 個月的窗起點("YYYY-MM-01")。用整數月運算
+    (而非天數估算),避免大小月造成窗口忽多忽少。"""
+    now = now if now is not None else _now_tpe()
+    total = now.year * 12 + (now.month - 1) - MONTHREV_WINDOW_MONTHS
+    y, m0 = divmod(total, 12)
+    return f"{y:04d}-{m0 + 1:02d}-01"
+
+
+def _load_monthrev_cache(ticker: str, now=None):
+    """讀月營收快取(TTL 7 天),回傳 `[(YYYY-MM, revenue), ...]` 或 `None`
+    (不存在/損毀/過期)。刻意獨立於 `_load_cache_raw`(主 blob 快取)——月營收
+    是月頻資料,不該跟著台股 EOD-aware(工單 013,天級)新鮮度規則走,用同一套
+    `_parse_fetched_at`/`_cache_age_minutes` 時鐘慣式,但門檻是自己的 7 天。"""
+    p = _monthrev_cache_path(ticker)
+    if not os.path.exists(p):
+        return None
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            blob = json.load(f)
+        fetched_at = _parse_fetched_at(blob["_fetched_at"])
+        if _cache_age_minutes(fetched_at, now) > MONTHREV_CACHE_TTL_MINUTES:
+            return None
+        return [(row[0], row[1]) for row in blob.get("rows", [])]
+    except Exception:
+        return None
+
+
+def _save_monthrev_cache(ticker: str, rows: list) -> None:
+    try:
+        blob = {"rows": [[m, r] for m, r in rows],
+                "_fetched_at": datetime.now(timezone.utc).isoformat()}
+        with open(_monthrev_cache_path(ticker), "w", encoding="utf-8") as f:
+            json.dump(blob, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def _fetch_month_revenue_tw(ticker: str, token: str, now=None) -> list:
+    """真正打 FinMind TaiwanStockMonthRevenue。回傳 `[(YYYY-MM, revenue), ...]`
+    依月份升冪、已去重(同月多筆取後者)。例外原樣往外拋,由呼叫端
+    `fetch_month_revenue` 決定要不要吞(統一的靜默失敗策略在那裡,不在這裡)。"""
+    start = _monthrev_start_date(now)
+    raw = _finmind("TaiwanStockMonthRevenue", ticker, start, token)
+    out = {}
+    for r in raw:
+        y, m, rev = r.get("revenue_year"), r.get("revenue_month"), r.get("revenue")
+        if y is None or m is None or rev in (None, ""):
+            continue
+        try:
+            y, m, rev = int(y), int(m), float(rev)
+        except (TypeError, ValueError):
+            continue
+        if not (1 <= m <= 12) or rev <= 0:
+            continue
+        out[f"{y:04d}-{m:02d}"] = rev
+    return [(k, out[k]) for k in sorted(out)]
+
+
+def fetch_month_revenue(ticker: str, token: str = "", now=None) -> list:
+    """月營收抓取入口(工單 018):`_load_monthrev_cache` 命中就不打 API;否則
+    呼叫 FinMind,成功才寫快取(失敗不寫,下次呼叫仍會重試,與主 blob 快取
+    `if data.ok(): _save_cache(...)` 同一套「只有成功才快取」哲學)。任何失敗
+    (網路/解析/FinMind 額度用罄等)一律靜默回空列表——只有 `fetch_tw` 在
+    `need_monthrev=True`(即 `fetch()` 判斷 TW+derive)時才會呼叫這個函數,
+    不影響非 derive 標的的呼叫數(見下方 `fetch_tw`/`fetch()` 接線)。"""
+    now = now if now is not None else _now_tpe()
+    cached = _load_monthrev_cache(ticker, now)
+    if cached is not None:
+        return cached
+    try:
+        rows = _fetch_month_revenue_tw(ticker, token, now)
+    except Exception:
+        return []
+    if rows:
+        _save_monthrev_cache(ticker, rows)
+    return rows
+
+
+def _needs_month_revenue(stock_cfg: dict) -> bool:
+    """工單 018(修正包 H3):僅 TW 市場、`method=="pe_band"`、且含
+    `valuation.derive` 區塊的標的才需要月營收護欄(現況約 1-6 檔)——SPEC 的
+    計算範圍本就限定 pe_band+derive(見 valuation.compute_zones 只在 pe_band
+    分支才用得到 revenue_check),補上 method 條件避免未來 derive 出現在非
+    pe_band 假設區塊時白白多打一次不會被用到的 FinMind 呼叫。與其他市場/
+    無 derive/非 pe_band 標的的呼叫數完全無關(0 新增)。"""
+    if str(stock_cfg.get("market", "")).upper() != "TW":
+        return False
+    val = stock_cfg.get("valuation") or {}
+    if val.get("method") != "pe_band":
+        return False
+    return bool(val.get("derive"))
+
+
+def fetch_tw(ticker: str, name: str, years: int, token: str = "", method: str = "",
+             need_monthrev: bool = False) -> StockData:
     start = (datetime.now() - timedelta(days=int(years * 365.25) + 10)).strftime("%Y-%m-%d")
     d = StockData(ticker=ticker, market="TW", name=name, currency="TWD", source="FinMind")
     try:
@@ -856,6 +981,16 @@ def fetch_tw(ticker: str, name: str, years: int, token: str = "", method: str = 
     # 015:序列組裝(含拆股還原)完成後才偵測缺口/尾端過舊,純附加告知,不影響上面
     # 任何已算完的數值。
     d.quality_warnings = _series_quality_warnings(d.price_history)
+    # 018:月營收護欄資料。只有 `need_monthrev=True`(fetch() 判斷 TW+derive)才
+    # 呼叫;獨立快取層見上方 fetch_month_revenue,失敗一律靜默,d.month_revenue
+    # 維持預設空列表(估價照常,只是少了這個護欄檢查)。放在函式最尾端,
+    # 只在價格抓取成功的主路徑執行(上面 FinMind 例外分支各自 return,不會走到
+    # 這裡;TWSE/TPEx 備援路徑同理不觸發,現況低優先級,見工單 018 REPORT)。
+    if need_monthrev:
+        try:
+            d.month_revenue = fetch_month_revenue(ticker, token)
+        except Exception:
+            pass
     return d
 
 
@@ -1052,7 +1187,8 @@ def fetch(stock_cfg: dict, providers_cfg: dict, history_years: int, use_cache: b
         # 這樣使用者在側邊欄填的金鑰會覆蓋部署者的,沒填則用部署者 env 金鑰。
         token = providers_cfg.get("finmind_token") or os.environ.get("FINMIND_TOKEN", "")
         method = (stock_cfg.get("valuation") or {}).get("method", "")  # 決定要不要打 PER/配息
-        data = fetch_tw(ticker, name, history_years, token, method)
+        data = fetch_tw(ticker, name, history_years, token, method,
+                         need_monthrev=_needs_month_revenue(stock_cfg))  # 018:僅 TW+derive
     elif market == "US":
         # 有 Finnhub 金鑰 → 用 Finnhub 取即時報價(雲端機房 IP 也行);否則 yfinance。
         # 金鑰優先序:config(含使用者自帶)> 環境變數/Secret(部署者)。

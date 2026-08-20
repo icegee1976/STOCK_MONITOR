@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .valuation import ZONE_KEYS, ZONE_LABEL
+from .valuation import ZONE_KEYS, ZONE_LABEL, format_revenue_check_line
 
 try:
     from rich.console import Console
@@ -81,6 +81,10 @@ def render_stock_card(item, config):
         _p(f"  估值錨點: {z['anchor_kind']} = {z['anchor']}"
            + (f" (目標 {z['target_year']} 年)" if z.get("target_year") else ""))
     _p(f"  假設: {z['assumptions']}")
+    # 018:月營收假設護欄(A+B 並示),只有 pe_band+derive+月營收足夠時才有值。
+    rc = z.get("revenue_check")
+    if rc:
+        _p(f"  營收軌跡: {format_revenue_check_line(rc)}")
     # 現價隱含的倍數 — 讓你一眼判斷「假設是否合理」
     if z.get("implied_multiple") is not None:
         yb = z.get("yield_bands")

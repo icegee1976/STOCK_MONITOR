@@ -21,7 +21,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 from aimonitor import providers
-from aimonitor.valuation import compute_zones, ValuationError, ZONE_KEYS, ZONE_LABEL
+from aimonitor.valuation import compute_zones, ValuationError, ZONE_KEYS, ZONE_LABEL, format_revenue_check_line
 from aimonitor.classify import analyze, REGION_ORDER
 from aimonitor.roi import scenario_roi
 
@@ -433,6 +433,9 @@ def _stock_tab_body():
                 st.markdown(f"**估值錨點**:{z.get('anchor_kind')} = {z.get('anchor')}"
                             + (f"(目標 {z['target_year']} 年)" if z.get("target_year") else ""))
                 st.markdown(f"**假設**:{z.get('assumptions')}")
+                rc = z.get("revenue_check")  # 018:月營收假設護欄(A+B 並示)
+                if rc:
+                    st.markdown(f"**營收軌跡**:{format_revenue_check_line(rc)}")
                 if a.get("annual_vol_pct"):
                     st.markdown(f"**年化波動率**:{a['annual_vol_pct']}%")
                 if a.get("price_percentile") is not None:
